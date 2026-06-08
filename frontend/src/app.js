@@ -39,6 +39,7 @@ const siteLayer = L.layerGroup().addTo(map);
 const plantLayer = L.layerGroup().addTo(map);
 const siloLayer = L.layerGroup().addTo(map);
 let pendingLocationMarker = null;
+let liveWeatherSiteId = null;
 
 async function boot() {
   bindLogin();
@@ -78,6 +79,7 @@ async function loadAppData() {
   await loadUsers();
   applyRoleVisibility();
   renderAll();
+  refreshLiveWeather(selectedSite());
 }
 
 function applyAccess(allSites, allDependencies) {
@@ -365,6 +367,11 @@ function renderMap() {
       fillOpacity: .90
     }).addTo(siteLayer);
     marker.bindPopup(`<div class="popup-title">${dep.town}</div><div>${dep.siteType} · CCP ${dep.ccpAssociated}</div><div>${dep.province}${dep.department ? ` · ${dep.department}` : ""}</div><div>${dep.siloCount || 0} silos · ${(dep.capacityM3 || 0).toLocaleString("es-AR")} m³</div>`);
+    marker.on("click", () => {
+      const site = state.sites.find(item => item.id === dep.parentSiteId)
+        || state.sites.find(item => item.town === dep.town && item.province === dep.province);
+      if (site) selectSite(site.id);
+    });
     bounds.push([dep.lat, dep.lng]);
   });
   const selected = state.sites.find(site => site.id === state.selectedSiteId) || sites[0];
@@ -759,7 +766,7 @@ function weatherPanel(site) {
           <div class="weather-value">${weather.externalHumidity}% HR</div>
           <div class="site-meta">Humedad externa crítica para decidir aireacion</div>
         </div>
-        <span class="chip normal">Estacion clima</span>
+        <span class="chip normal">${weather.source || "Demo clima"}</span>
       </div>
       <div class="weather-grid">
         <div class="mini"><strong>${weather.externalTemperature}°C</strong><span>temp. externa</span></div>
@@ -1074,8 +1081,11 @@ function selectSite(siteId) {
   const site = state.sites.find(item => item.id === siteId);
   if (!site) return;
   state.selectedSiteId = site.id;
-  state.selectedSiloId = (site.silos.filter(matchesSilo)[0] || site.silos[0]).id;
+  state.selectedSiloId = (site.silos.filter(matchesSilo)[0] || site.silos[0])?.id || null;
+  const select = document.getElementById("siteSelect");
+  if (select) select.value = site.id;
   renderAll();
+  refreshLiveWeather(site);
 }
 
 function selectSilo(siteId, siloId) {
@@ -1084,7 +1094,48 @@ function selectSilo(siteId, siloId) {
   if (!silo) return;
   state.selectedSiteId = site.id;
   state.selectedSiloId = silo.id;
+  const select = document.getElementById("siteSelect");
+  if (select) select.value = site.id;
   renderAll();
+  refreshLiveWeather(site);
+}
+
+async function refreshLiveWeather(site) {
+  if (!site || liveWeatherSiteId === site.id) return;
+  liveWeatherSiteId = site.id;
+  try {
+    const params = new URLSearchParams({
+      latitude: site.lat,
+      longitude: site.lng,
+      current: "temperature_2m,relative_humidity_2m,dew_point_2m,wind_speed_10m,pressure_msl,precipitation",
+      timezone: "auto"
+    });
+    const response = await fetch(`https://api.open-meteo.com/v1/forecast?${params.toString()}`);
+    if (!response.ok) throw new Error("Open-Meteo no disponible");
+    const payload = await response.json();
+    const current = payload.current || {};
+    site.weather = {
+      ...site.weather,
+      recordedAt: current.time || new Date().toISOString(),
+      externalTemperature: roundOne(current.temperature_2m),
+      externalHumidity: roundOne(current.relative_humidity_2m),
+      dewPoint: roundOne(current.dew_point_2m),
+      windKmh: roundOne(current.wind_speed_10m),
+      pressureHpa: roundOne(current.pressure_msl),
+      rainMm: roundOne(current.precipitation),
+      source: "Open-Meteo"
+    };
+    renderMetrics();
+    renderDetail();
+  } catch (error) {
+    console.warn(error);
+  } finally {
+    liveWeatherSiteId = null;
+  }
+}
+
+function roundOne(value) {
+  return Number.isFinite(Number(value)) ? Math.round(Number(value) * 10) / 10 : 0;
 }
 
 function average(values) {

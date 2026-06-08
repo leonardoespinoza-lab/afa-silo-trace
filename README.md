@@ -17,6 +17,7 @@ Incluye:
 - Filtros por provincia, departamento, localidad, grano y estado.
 - Datos internos del silo: humedad, temperatura, volumen, toneladas, dias almacenados y dias seguros estimados.
 - Datos climaticos externos por acopio: temperatura, humedad ambiente, punto de rocio, viento, presion y lluvia.
+- Clima real al seleccionar sitio usando Open-Meteo por coordenada del establecimiento, sin API key.
 - Desglose por acopio con cada silo identificado.
 - Representacion de silos como circunferencias sobre el mapa usando diametro en metros.
 - Modo para ajustar la ubicacion real de la planta haciendo click sobre mapa satelital.
