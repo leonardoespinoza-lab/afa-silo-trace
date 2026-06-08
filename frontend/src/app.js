@@ -43,6 +43,7 @@ const plantLayer = L.layerGroup().addTo(map);
 const siloLayer = L.layerGroup().addTo(map);
 let pendingLocationMarker = null;
 let pendingLocation = null;
+let pendingSiloCircle = null;
 let liveWeatherSiteId = null;
 
 async function boot() {
@@ -156,6 +157,8 @@ function bindControls() {
   });
   document.getElementById("siloForm").addEventListener("submit", submitSilo);
   document.getElementById("siloForm").addEventListener("input", updateSiloCalculation);
+  document.getElementById("siloForm").addEventListener("input", drawPendingSiloCircle);
+  document.getElementById("pickSiloOnMap").addEventListener("click", beginSiloMapPick);
   document.querySelectorAll("[data-close]").forEach(button => {
     button.addEventListener("click", () => closeModal(button.dataset.close));
   });
@@ -689,12 +692,12 @@ function renderDetail() {
       <p class="section-title">Silos del establecimiento</p>
       <div class="map-tools">
         <button class="button" id="addSilo">Agregar primer silo</button>
-        <button class="button secondary" id="drawSilo">Dibujar silo</button>
         <button class="button secondary" id="locatePlant">Mover punto</button>
         ${state.locatingSiteId === site.id ? `<button class="button" id="saveLocation">Guardar ubicacion</button>` : ""}
         <button class="button secondary" id="editCoords">Coordenadas</button>
         <button class="button secondary" id="editSite">Editar ficha</button>
-        <button class="button secondary" id="drawBoundary">${state.drawingBoundarySiteId === site.id ? "Guardar limite" : "Dibujar limite"}</button>
+        <button class="button secondary" id="drawBoundary">${state.drawingBoundarySiteId === site.id ? "Guardar limite" : "Dibujar establecimiento"}</button>
+        ${state.drawingBoundarySiteId === site.id ? `<button class="button secondary" id="undoBoundary">Deshacer punto</button><button class="button secondary" id="cancelBoundary">Cancelar limite</button>` : ""}
       </div>
       <div class="note">${mapModeHelp(site) || "Sitio cargado desde la base oficial AFA. Falta relevar silos fisicos: centro del silo, diametro, altura, grano, humedad y sensores internos."}</div>
       <div class="detail-grid">
@@ -705,12 +708,13 @@ function renderDetail() {
       <div class="note">${sourceNote}</div>
     `;
     document.getElementById("addSilo").addEventListener("click", () => openSiloForm(site));
-    document.getElementById("drawSilo").addEventListener("click", () => startDrawSilo(site));
     document.getElementById("locatePlant").addEventListener("click", () => startLocatePlant(site));
     document.getElementById("saveLocation")?.addEventListener("click", () => savePendingLocation(site));
     document.getElementById("editCoords").addEventListener("click", () => promptCoordinates(site));
     document.getElementById("editSite").addEventListener("click", () => promptSiteMetadata(site));
     document.getElementById("drawBoundary").addEventListener("click", () => toggleBoundary(site));
+    document.getElementById("undoBoundary")?.addEventListener("click", () => undoBoundaryPoint(site));
+    document.getElementById("cancelBoundary")?.addEventListener("click", () => cancelBoundary(site));
     return;
   }
   document.getElementById("detail").innerHTML = `
@@ -735,12 +739,12 @@ function renderDetail() {
     <p class="section-title">Silos del acopio</p>
     <div class="map-tools">
       <button class="button" id="addSilo">Agregar silo</button>
-      <button class="button secondary" id="drawSilo">Dibujar silo</button>
       <button class="button secondary" id="locatePlant">Mover punto</button>
       ${state.locatingSiteId === site.id ? `<button class="button" id="saveLocation">Guardar ubicacion</button>` : ""}
       <button class="button secondary" id="editCoords">Coordenadas</button>
       <button class="button secondary" id="editSite">Editar ficha</button>
-      <button class="button secondary" id="drawBoundary">${state.drawingBoundarySiteId === site.id ? "Guardar limite" : "Dibujar limite"}</button>
+      <button class="button secondary" id="drawBoundary">${state.drawingBoundarySiteId === site.id ? "Guardar limite" : "Dibujar establecimiento"}</button>
+      ${state.drawingBoundarySiteId === site.id ? `<button class="button secondary" id="undoBoundary">Deshacer punto</button><button class="button secondary" id="cancelBoundary">Cancelar limite</button>` : ""}
     </div>
     <div class="silo-layout-note">${mapModeHelp(site) || locationHelp(site)}</div>
     <div class="silo-list">
@@ -777,12 +781,13 @@ function renderDetail() {
   `;
   document.querySelectorAll("[data-silo]").forEach(row => row.addEventListener("click", () => selectSilo(site.id, row.dataset.silo)));
   document.getElementById("addSilo").addEventListener("click", () => openSiloForm(site));
-  document.getElementById("drawSilo").addEventListener("click", () => startDrawSilo(site));
   document.getElementById("locatePlant").addEventListener("click", () => startLocatePlant(site));
   document.getElementById("saveLocation")?.addEventListener("click", () => savePendingLocation(site));
   document.getElementById("editCoords").addEventListener("click", () => promptCoordinates(site));
   document.getElementById("editSite").addEventListener("click", () => promptSiteMetadata(site));
   document.getElementById("drawBoundary").addEventListener("click", () => toggleBoundary(site));
+  document.getElementById("undoBoundary")?.addEventListener("click", () => undoBoundaryPoint(site));
+  document.getElementById("cancelBoundary")?.addEventListener("click", () => cancelBoundary(site));
   document.getElementById("toggleMotor").addEventListener("click", () => {
     silo.motorOn = !silo.motorOn;
     renderAll();
@@ -855,10 +860,10 @@ function locationHelp(site) {
 
 function mapModeHelp(site) {
   if (state.drawingSiloSiteId === site.id) {
-    return "Modo dibujo de silo activo: hace click sobre el centro real del silo en la imagen satelital. Luego carga diametro y altura para calcular volumen.";
+    return "Modo ubicacion de silo activo: hace click sobre el centro real del silo. Volveras al cuadro Crear silo con la coordenada cargada.";
   }
   if (state.drawingBoundarySiteId === site.id) {
-    return `Modo limite activo: hace clicks sobre los vertices del predio. Puntos marcados: ${state.boundaryDraft.length}. Pulsa Guardar limite al terminar.`;
+    return `Modo establecimiento activo: hace click en los vertices. Puntos: ${state.boundaryDraft.length}. Puedes deshacer, cancelar o guardar.`;
   }
   return "";
 }
@@ -971,6 +976,7 @@ function openSiloForm(site, point = null) {
   form.elements.lng.value = (point?.lng ?? site.lng + 0.00025).toFixed(6);
   form.dataset.siteId = site.id;
   updateSiloCalculation();
+  drawPendingSiloCircle();
   openModal("siloModal");
 }
 
@@ -1114,11 +1120,15 @@ async function savePendingLocation(site) {
   await updateSiteLocation(site.id, point.lat, point.lng, "Ubicacion corregida por usuario");
 }
 
-function startDrawSilo(site) {
-  state.drawingSiloSiteId = site.id;
+function beginSiloMapPick() {
+  const form = document.getElementById("siloForm");
+  const siteId = form.dataset.siteId || state.selectedSiteId;
+  state.drawingSiloSiteId = siteId;
   state.locatingSiteId = null;
   state.drawingBoundarySiteId = null;
-  map.setView([site.lat, site.lng], 18, { animate: true });
+  const site = state.sites.find(item => item.id === siteId);
+  closeModal("siloModal");
+  if (site) map.setView([site.lat, site.lng], 18, { animate: true });
   renderDetail();
 }
 
@@ -1147,12 +1157,30 @@ async function toggleBoundary(site) {
   renderAll();
 }
 
+function undoBoundaryPoint(site) {
+  if (state.drawingBoundarySiteId !== site.id) return;
+  state.boundaryDraft.pop();
+  renderAll();
+}
+
+function cancelBoundary(site) {
+  if (state.drawingBoundarySiteId !== site.id) return;
+  state.drawingBoundarySiteId = null;
+  state.boundaryDraft = [];
+  renderAll();
+}
+
 async function handleMapClick(event) {
   if (state.drawingSiloSiteId) {
     const site = state.sites.find(item => item.id === state.drawingSiloSiteId);
     if (!site) return;
     state.drawingSiloSiteId = null;
-    openSiloForm(site, event.latlng);
+    const form = document.getElementById("siloForm");
+    form.elements.lat.value = event.latlng.lat.toFixed(6);
+    form.elements.lng.value = event.latlng.lng.toFixed(6);
+    updateSiloCalculation();
+    drawPendingSiloCircle();
+    openModal("siloModal");
     renderDetail();
     return;
   }
@@ -1254,6 +1282,25 @@ function updateSiloCalculation() {
     Volumen con ${fill}% de llenado: <strong>${volume.toLocaleString("es-AR")} m³</strong><br>
     Peso estimado para ${display(grain)}: <strong>${tons.toLocaleString("es-AR")} t</strong>
   `;
+}
+
+function drawPendingSiloCircle() {
+  const form = document.getElementById("siloForm");
+  const lat = Number(form.elements.lat.value);
+  const lng = Number(form.elements.lng.value);
+  const diameter = Number(form.elements.diameter_m.value || 0);
+  if (pendingSiloCircle) {
+    pendingSiloCircle.remove();
+    pendingSiloCircle = null;
+  }
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || !diameter) return;
+  pendingSiloCircle = L.circle([lat, lng], {
+    radius: Math.max(3, diameter / 2),
+    color: "#f4f542",
+    weight: 2,
+    fillColor: "#39ff88",
+    fillOpacity: .28
+  }).addTo(siloLayer).bindTooltip("Silo a crear", { direction: "top" });
 }
 
 function selectSite(siteId) {
