@@ -11,6 +11,9 @@ const state = {
   selectedSiteId: null,
   selectedSiloId: null,
   locatingSiteId: null,
+  drawingSiloSiteId: null,
+  drawingBoundarySiteId: null,
+  boundaryDraft: [],
   currentUser: null,
   view: "dashboard",
   users: []
@@ -331,10 +334,22 @@ function renderMap() {
     siteMarker.bindTooltip(site.name, { direction: "top", offset: [0, -12], opacity: .92 });
     siteMarker.on("click", () => selectSite(site.id));
     bounds.push([site.lat, site.lng]);
+    if (state.selectedSiteId === site.id) {
+      L.marker([site.lat, site.lng], { draggable: true })
+        .addTo(siteLayer)
+        .bindTooltip("Arrastra para corregir ubicacion", { direction: "right" })
+        .on("dragend", event => {
+          const point = event.target.getLatLng();
+          updateSiteLocation(site.id, point.lat, point.lng, "Punto arrastrado en mapa");
+        });
+    }
 
     const layout = plantLayout(site);
+    const boundary = state.drawingBoundarySiteId === site.id && state.boundaryDraft.length
+      ? state.boundaryDraft.map(point => [point.lat, point.lng])
+      : site.boundary?.length ? site.boundary.map(point => [point.lat, point.lng]) : layout.boundary;
     if (state.selectedSiteId === site.id || map.getZoom() >= 12) {
-      L.polygon(layout.boundary, {
+      L.polygon(boundary, {
         color: "#39ff88",
         weight: 2,
         opacity: .95,
@@ -671,10 +686,13 @@ function renderDetail() {
       <p class="section-title">Silos del establecimiento</p>
       <div class="map-tools">
         <button class="button" id="addSilo">Agregar primer silo</button>
-        <button class="button secondary" id="zoomPlant">Ver planta</button>
-        <button class="button secondary" id="locatePlant">Ajustar ubicacion</button>
+        <button class="button secondary" id="drawSilo">Dibujar silo</button>
+        <button class="button secondary" id="locatePlant">Mover punto</button>
+        <button class="button secondary" id="editCoords">Coordenadas</button>
+        <button class="button secondary" id="editSite">Editar ficha</button>
+        <button class="button secondary" id="drawBoundary">${state.drawingBoundarySiteId === site.id ? "Guardar limite" : "Dibujar limite"}</button>
       </div>
-      <div class="note">Sitio cargado desde la base oficial AFA. Falta relevar silos fisicos: centro del silo, diametro, altura, grano, humedad y sensores internos.</div>
+      <div class="note">${mapModeHelp(site) || "Sitio cargado desde la base oficial AFA. Falta relevar silos fisicos: centro del silo, diametro, altura, grano, humedad y sensores internos."}</div>
       <div class="detail-grid">
         ${valueCard("Estado de carga", "Pendiente", "Sin silos cargados todavia")}
         ${valueCard("Coordenadas", `${Number(site.lat).toFixed(7)}, ${Number(site.lng).toFixed(7)}`, site.coordMaps || site.locationSource || "Base oficial")}
@@ -683,8 +701,11 @@ function renderDetail() {
       <div class="note">${sourceNote}</div>
     `;
     document.getElementById("addSilo").addEventListener("click", () => openSiloForm(site));
-    document.getElementById("zoomPlant").addEventListener("click", () => map.setView([site.lat, site.lng], 17, { animate: true }));
+    document.getElementById("drawSilo").addEventListener("click", () => startDrawSilo(site));
     document.getElementById("locatePlant").addEventListener("click", () => startLocatePlant(site));
+    document.getElementById("editCoords").addEventListener("click", () => promptCoordinates(site));
+    document.getElementById("editSite").addEventListener("click", () => promptSiteMetadata(site));
+    document.getElementById("drawBoundary").addEventListener("click", () => toggleBoundary(site));
     return;
   }
   document.getElementById("detail").innerHTML = `
@@ -709,10 +730,13 @@ function renderDetail() {
     <p class="section-title">Silos del acopio</p>
     <div class="map-tools">
       <button class="button" id="addSilo">Agregar silo</button>
-      <button class="button secondary" id="zoomPlant">Ver planta</button>
-      <button class="button secondary" id="locatePlant">Ajustar ubicacion</button>
+      <button class="button secondary" id="drawSilo">Dibujar silo</button>
+      <button class="button secondary" id="locatePlant">Mover punto</button>
+      <button class="button secondary" id="editCoords">Coordenadas</button>
+      <button class="button secondary" id="editSite">Editar ficha</button>
+      <button class="button secondary" id="drawBoundary">${state.drawingBoundarySiteId === site.id ? "Guardar limite" : "Dibujar limite"}</button>
     </div>
-    <div class="silo-layout-note">${locationHelp(site)}</div>
+    <div class="silo-layout-note">${mapModeHelp(site) || locationHelp(site)}</div>
     <div class="silo-list">
       ${silos.map(item => `
         <div class="silo-row ${item.id === silo.id ? "active" : ""}" data-silo="${item.id}">
@@ -747,8 +771,11 @@ function renderDetail() {
   `;
   document.querySelectorAll("[data-silo]").forEach(row => row.addEventListener("click", () => selectSilo(site.id, row.dataset.silo)));
   document.getElementById("addSilo").addEventListener("click", () => openSiloForm(site));
-  document.getElementById("zoomPlant").addEventListener("click", () => map.setView([site.lat, site.lng], 17, { animate: true }));
+  document.getElementById("drawSilo").addEventListener("click", () => startDrawSilo(site));
   document.getElementById("locatePlant").addEventListener("click", () => startLocatePlant(site));
+  document.getElementById("editCoords").addEventListener("click", () => promptCoordinates(site));
+  document.getElementById("editSite").addEventListener("click", () => promptSiteMetadata(site));
+  document.getElementById("drawBoundary").addEventListener("click", () => toggleBoundary(site));
   document.getElementById("toggleMotor").addEventListener("click", () => {
     silo.motorOn = !silo.motorOn;
     renderAll();
@@ -817,6 +844,16 @@ function locationHelp(site) {
     return "Esta planta todavia usa coordenada aproximada de localidad. Pulsa Ajustar ubicacion, busca el acopio en satelite y hace click sobre el centro real de la planta.";
   }
   return "Cada circunferencia representa el diametro real del silo. Para relevar la planta se ajusta centro, limite del acopio, diametro y altura de cada silo.";
+}
+
+function mapModeHelp(site) {
+  if (state.drawingSiloSiteId === site.id) {
+    return "Modo dibujo de silo activo: hace click sobre el centro real del silo en la imagen satelital. Luego carga diametro y altura para calcular volumen.";
+  }
+  if (state.drawingBoundarySiteId === site.id) {
+    return `Modo limite activo: hace clicks sobre los vertices del predio. Puntos marcados: ${state.boundaryDraft.length}. Pulsa Guardar limite al terminar.`;
+  }
+  return "";
 }
 
 function storagePanel(silo) {
@@ -919,12 +956,12 @@ function selectedSite() {
   return state.sites.find(site => site.id === state.selectedSiteId) || state.sites[0];
 }
 
-function openSiloForm(site) {
+function openSiloForm(site, point = null) {
   const form = document.getElementById("siloForm");
   form.reset();
   form.elements.code.value = `S-${site.town.slice(0, 3).toUpperCase()}-${String(site.silos.length + 1).padStart(2, "0")}`;
-  form.elements.lat.value = (site.lat + 0.00025).toFixed(6);
-  form.elements.lng.value = (site.lng + 0.00025).toFixed(6);
+  form.elements.lat.value = (point?.lat ?? site.lat + 0.00025).toFixed(6);
+  form.elements.lng.value = (point?.lng ?? site.lng + 0.00025).toFixed(6);
   form.dataset.siteId = site.id;
   updateSiloCalculation();
   openModal("siloModal");
@@ -1031,6 +1068,8 @@ async function refreshData(siteId = state.selectedSiteId, siloId = state.selecte
 
 function startLocatePlant(site) {
   state.locatingSiteId = site.id;
+  state.drawingSiloSiteId = null;
+  state.drawingBoundarySiteId = null;
   map.setView([site.lat, site.lng], 16, { animate: true });
   if (pendingLocationMarker) {
     pendingLocationMarker.remove();
@@ -1039,24 +1078,106 @@ function startLocatePlant(site) {
   renderDetail();
 }
 
+function startDrawSilo(site) {
+  state.drawingSiloSiteId = site.id;
+  state.locatingSiteId = null;
+  state.drawingBoundarySiteId = null;
+  map.setView([site.lat, site.lng], 18, { animate: true });
+  renderDetail();
+}
+
+async function toggleBoundary(site) {
+  if (state.drawingBoundarySiteId === site.id) {
+    if (state.boundaryDraft.length < 3) {
+      alert("Marca al menos 3 puntos para cerrar el limite.");
+      return;
+    }
+    const response = await fetch(`/api/sites/${site.id}/boundary`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ boundary: state.boundaryDraft })
+    });
+    if (!response.ok) throw new Error(await response.text());
+    state.drawingBoundarySiteId = null;
+    state.boundaryDraft = [];
+    await refreshData(site.id, state.selectedSiloId);
+    return;
+  }
+  state.drawingBoundarySiteId = site.id;
+  state.boundaryDraft = site.boundary ? [...site.boundary] : [];
+  state.locatingSiteId = null;
+  state.drawingSiloSiteId = null;
+  map.setView([site.lat, site.lng], 18, { animate: true });
+  renderAll();
+}
+
 async function handleMapClick(event) {
+  if (state.drawingSiloSiteId) {
+    const site = state.sites.find(item => item.id === state.drawingSiloSiteId);
+    if (!site) return;
+    state.drawingSiloSiteId = null;
+    openSiloForm(site, event.latlng);
+    renderDetail();
+    return;
+  }
+  if (state.drawingBoundarySiteId) {
+    state.boundaryDraft.push({ lat: event.latlng.lat, lng: event.latlng.lng });
+    renderAll();
+    return;
+  }
   if (!state.locatingSiteId) return;
   const siteId = state.locatingSiteId;
   const { lat, lng } = event.latlng;
   if (pendingLocationMarker) pendingLocationMarker.remove();
   pendingLocationMarker = L.marker([lat, lng]).addTo(map).bindPopup("Nueva ubicacion de planta").openPopup();
-  const response = await fetch(`/api/sites/${siteId}/location`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ lat, lng, location_source: "Relevamiento satelital demo" })
-  });
-  if (!response.ok) throw new Error(await response.text());
   state.locatingSiteId = null;
   if (pendingLocationMarker) {
     pendingLocationMarker.remove();
     pendingLocationMarker = null;
   }
-  await refreshData(siteId);
+  await updateSiteLocation(siteId, lat, lng, "Relevamiento satelital demo");
+}
+
+async function promptCoordinates(site) {
+  const lat = prompt("Latitud decimal del sitio", site.lat);
+  if (lat === null) return;
+  const lng = prompt("Longitud decimal del sitio", site.lng);
+  if (lng === null) return;
+  const nextLat = Number(lat);
+  const nextLng = Number(lng);
+  if (!Number.isFinite(nextLat) || !Number.isFinite(nextLng)) {
+    alert("Coordenadas invalidas.");
+    return;
+  }
+  await updateSiteLocation(site.id, nextLat, nextLng, "Coordenada editada manualmente");
+}
+
+async function promptSiteMetadata(site) {
+  const address = prompt("Domicilio", site.address || "");
+  if (address === null) return;
+  const phone = prompt("Telefono", site.phone || "");
+  if (phone === null) return;
+  const email = prompt("Correo", site.email || "");
+  if (email === null) return;
+  const region = prompt("Region", site.region || "");
+  if (region === null) return;
+  const response = await fetch(`/api/sites/${site.id}/metadata`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ address, phone, email, region })
+  });
+  if (!response.ok) throw new Error(await response.text());
+  await refreshData(site.id, state.selectedSiloId);
+}
+
+async function updateSiteLocation(siteId, lat, lng, source) {
+  const response = await fetch(`/api/sites/${siteId}/location`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ lat, lng, location_source: source })
+  });
+  if (!response.ok) throw new Error(await response.text());
+  await refreshData(siteId, state.selectedSiloId);
   map.setView([lat, lng], 18, { animate: true });
 }
 

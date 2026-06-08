@@ -18,6 +18,7 @@ Incluye:
 - Datos internos del silo: humedad, temperatura, volumen, toneladas, dias almacenados y dias seguros estimados.
 - Datos climaticos externos por acopio: temperatura, humedad ambiente, punto de rocio, viento, presion y lluvia.
 - Clima real al seleccionar sitio usando Open-Meteo por coordenada del establecimiento, sin API key.
+- Herramientas de relevamiento en mapa: mover punto del establecimiento, editar coordenadas, editar ficha, dibujar silo por click y guardar limite/poligono del predio.
 - Desglose por acopio con cada silo identificado.
 - Representacion de silos como circunferencias sobre el mapa usando diametro en metros.
 - Modo para ajustar la ubicacion real de la planta haciendo click sobre mapa satelital.
@@ -143,6 +144,8 @@ frontend/
 - `POST /api/dependencies`
 - `POST /api/sites/{site_id}/silos`
 - `PATCH /api/sites/{site_id}/location`
+- `PATCH /api/sites/{site_id}/metadata`
+- `PATCH /api/sites/{site_id}/boundary`
 
 ## Notas para demo
 

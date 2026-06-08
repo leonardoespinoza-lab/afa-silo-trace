@@ -136,6 +136,7 @@ def ensure_site_columns(conn: sqlite3.Connection) -> None:
         "original_lat": "ALTER TABLE sites ADD COLUMN original_lat TEXT",
         "original_lng": "ALTER TABLE sites ADD COLUMN original_lng TEXT",
         "source_file": "ALTER TABLE sites ADD COLUMN source_file TEXT",
+        "boundary_geojson": "ALTER TABLE sites ADD COLUMN boundary_geojson TEXT",
     }
     for column, sql in additions.items():
         if column not in columns:
@@ -555,7 +556,7 @@ def latest_sites() -> list[dict]:
               s.id AS site_id, s.name, s.province, s.department, s.town, s.lat AS site_lat, s.lng AS site_lng,
               s.cuit, s.plant_number, s.registry_status, s.address, s.location_source,
               s.region, s.phone, s.email, s.coord_maps, s.maps_url, s.directions_url,
-              s.original_lat, s.original_lng, s.source_file,
+              s.original_lat, s.original_lng, s.source_file, s.boundary_geojson,
               w.recorded_at AS weather_recorded_at, w.external_temperature, w.external_humidity,
               w.dew_point, w.wind_kmh, w.pressure_hpa, w.rain_mm,
               si.id AS silo_id, si.code, si.grain, si.campaign, si.producer, si.origin,
@@ -597,6 +598,7 @@ def latest_sites() -> list[dict]:
                 "originalLat": row["original_lat"],
                 "originalLng": row["original_lng"],
                 "sourceFile": row["source_file"],
+                "boundary": json.loads(row["boundary_geojson"]) if row["boundary_geojson"] else None,
                 "weather": {
                     "recordedAt": row["weather_recorded_at"],
                     "externalTemperature": row["external_temperature"],
@@ -883,6 +885,40 @@ def update_site_location(site_id: str, payload: dict) -> dict:
     return {"ok": True, "siteId": site_id, "lat": lat, "lng": lng, "locationSource": source}
 
 
+def update_site_metadata(site_id: str, payload: dict) -> dict:
+    allowed = ["name", "province", "department", "town", "address", "region", "phone", "email"]
+    fields = [key for key in allowed if key in payload]
+    if not fields:
+        raise ValueError("No hay campos para actualizar")
+    assignments = ", ".join(f"{field} = ?" for field in fields)
+    values = [payload[field] for field in fields]
+    values.append(site_id)
+    with connect() as conn:
+        cur = conn.execute(f"UPDATE sites SET {assignments} WHERE id = ?", values)
+        if cur.rowcount == 0:
+            raise KeyError("Site not found")
+        conn.commit()
+    return {"ok": True, "siteId": site_id}
+
+
+def update_site_boundary(site_id: str, payload: dict) -> dict:
+    points = payload.get("boundary")
+    if not isinstance(points, list) or len(points) < 3:
+        raise ValueError("El limite necesita al menos 3 puntos")
+    normalized = []
+    for point in points:
+        normalized.append({"lat": float(point["lat"]), "lng": float(point["lng"])})
+    with connect() as conn:
+        cur = conn.execute(
+            "UPDATE sites SET boundary_geojson = ?, location_source = ? WHERE id = ?",
+            (json.dumps(normalized), "Limite dibujado por usuario", site_id),
+        )
+        if cur.rowcount == 0:
+            raise KeyError("Site not found")
+        conn.commit()
+    return {"ok": True, "siteId": site_id, "boundary": normalized}
+
+
 def insert_silo(site_id: str, payload: dict) -> dict:
     required = ["code", "grain", "diameter_m", "height_m", "lat", "lng"]
     missing = [key for key in required if key not in payload]
@@ -1117,6 +1153,12 @@ class Handler(SimpleHTTPRequestHandler):
             payload = self.read_json()
             if parsed.path.startswith("/api/sites/") and parsed.path.endswith("/location"):
                 self.send_json(update_site_location(parsed.path.split("/")[3], payload))
+                return
+            if parsed.path.startswith("/api/sites/") and parsed.path.endswith("/metadata"):
+                self.send_json(update_site_metadata(parsed.path.split("/")[3], payload))
+                return
+            if parsed.path.startswith("/api/sites/") and parsed.path.endswith("/boundary"):
+                self.send_json(update_site_boundary(parsed.path.split("/")[3], payload))
                 return
             self.send_json({"error": "Not found"}, status=404)
         except KeyError as exc:
