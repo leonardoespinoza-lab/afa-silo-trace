@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AFA Silo Trace</title>
+  <link rel="preconnect" href="https://unpkg.com" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="./src/styles.css" />
+</head>
+<body>
+  <section class="login-screen" id="loginScreen">
+    <form class="login-card" id="loginForm">
+      <div class="brand login-brand">
+        <div class="brand-mark">AFA</div>
+        <div>
+          <h1>AFA Silo Trace</h1>
+          <p>Acceso a monitoreo y trazabilidad de acopios.</p>
+        </div>
+      </div>
+      <label>Email
+        <input name="email" type="email" value="admin@afa.demo" required />
+      </label>
+      <label>Contraseña
+        <input name="password" type="password" value="admin123" required />
+      </label>
+      <button class="button" type="submit">Ingresar</button>
+      <div class="login-help">Demo admin: admin@afa.demo / admin123<br>Demo CCP: arrecifes@afa.demo / arrecifes123</div>
+      <div class="note" id="loginError" hidden></div>
+    </form>
+  </section>
+
+  <div class="app-shell dashboard" id="appShell" hidden>
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">AFA</div>
+        <div>
+          <h1>AFA Silo Trace</h1>
+          <p>Monitoreo, clima, automatizacion y trazabilidad de silos de chapa.</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <div class="top-metrics" id="topMetrics"></div>
+        <button class="button secondary" id="logoutButton">Cerrar sesion</button>
+      </div>
+    </header>
+
+    <aside class="sidebar">
+      <nav class="module-nav">
+        <button class="nav-button active" data-view="dashboard">Dashboard</button>
+        <button class="nav-button" data-view="map">Mapa</button>
+        <button class="nav-button" data-view="sites">Sitios</button>
+        <button class="nav-button" data-view="alerts">Alertas</button>
+        <button class="nav-button admin-only" data-view="users">Usuarios</button>
+      </nav>
+      <section class="selector-panel">
+        <p class="section-title">Seleccion principal</p>
+        <button class="button full admin-only" id="openSiteForm">Agregar acopio</button>
+        <button class="button secondary full admin-only" id="openDependencyForm">Agregar dependencia</button>
+        <div class="filters">
+          <label>Provincia
+            <select id="provinceFilter"></select>
+          </label>
+          <label>CCP / establecimiento
+            <select id="siteSelect"></select>
+          </label>
+          <label>Buscar red AFA
+            <input id="searchFilter" type="search" placeholder="Ej. Maciel, Metan, S-ARR-01" />
+          </label>
+        </div>
+      </section>
+
+      <details class="menu-block" open>
+        <summary>Filtros avanzados</summary>
+        <div class="filters">
+          <label>Tipo de sitio
+            <select id="siteTypeFilter"></select>
+          </label>
+          <label>CCP asociado
+            <select id="ccpFilter"></select>
+          </label>
+          <label>Departamento / partido
+            <select id="departmentFilter"></select>
+          </label>
+          <label>Grano
+            <select id="grainFilter"></select>
+          </label>
+          <label>Estado silo
+            <select id="riskFilter"></select>
+          </label>
+        </div>
+      </details>
+
+      <details class="menu-block">
+        <summary>Acopios / establecimientos</summary>
+        <div class="site-list" id="siteList"></div>
+      </details>
+
+      <details class="menu-block">
+        <summary>Dependencias Red AFA</summary>
+        <div class="dependency-list" id="dependencyList"></div>
+      </details>
+    </aside>
+
+    <main class="map-stage">
+      <section class="workspace-panel" id="dashboardView"></section>
+      <section class="workspace-panel" id="alertsView"></section>
+      <section class="workspace-panel" id="usersView">
+        <div class="section-head">
+          <div>
+            <p class="section-title">Administracion</p>
+            <h2>Usuarios</h2>
+          </div>
+          <button class="button" id="openUserForm">Crear usuario</button>
+        </div>
+        <div id="userList" class="user-list"></div>
+      </section>
+      <div id="map"></div>
+      <div class="legend">
+        <strong>Estado de conservacion</strong>
+        <span><i class="dot normal"></i>Normal</span>
+        <span><i class="dot atencion"></i>Atencion</span>
+        <span><i class="dot riesgo"></i>Riesgo</span>
+        <span><i class="dot critico"></i>Critico</span>
+      </div>
+    </main>
+
+    <section class="detail" id="detail"></section>
+  </div>
+
+  <div class="modal" id="reportModal" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="reportTitle">
+      <div class="modal-head">
+        <h2 id="reportTitle">Certificado digital de conservacion</h2>
+        <div class="modal-actions">
+          <button class="button secondary" id="printReport">Imprimir</button>
+          <button class="button" id="closeReport">Cerrar</button>
+        </div>
+      </div>
+      <pre id="reportBody"></pre>
+    </div>
+  </div>
+
+  <div class="modal" id="siteModal" aria-hidden="true">
+    <form class="modal-card form-card" id="siteForm">
+      <div class="modal-head">
+        <h2>Nuevo acopio</h2>
+        <button class="button secondary" type="button" data-close="siteModal">Cerrar</button>
+      </div>
+      <div class="form-grid">
+        <label>Nombre del acopio<input name="name" required placeholder="CCP Demo AFA" /></label>
+        <label>Provincia<input name="province" required placeholder="Santa Fe" /></label>
+        <label>Departamento<input name="department" required placeholder="Iriondo" /></label>
+        <label>Localidad<input name="town" required placeholder="Totoras" /></label>
+        <label>Latitud<input name="lat" type="number" step="0.000001" required /></label>
+        <label>Longitud<input name="lng" type="number" step="0.000001" required /></label>
+        <label>Humedad externa %<input name="external_humidity" type="number" step="0.1" value="65" /></label>
+        <label>Temperatura externa °C<input name="external_temperature" type="number" step="0.1" value="20" /></label>
+      </div>
+      <div class="form-actions">
+        <button class="button" type="submit">Crear acopio</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="modal" id="siloModal" aria-hidden="true">
+    <form class="modal-card form-card" id="siloForm">
+      <div class="modal-head">
+        <h2>Nuevo silo de chapa</h2>
+        <button class="button secondary" type="button" data-close="siloModal">Cerrar</button>
+      </div>
+      <div class="form-grid">
+        <label>Codigo<input name="code" required placeholder="S-NUE-01" /></label>
+        <label>Grano
+          <select name="grain">
+            <option>Maiz</option>
+            <option>Trigo</option>
+            <option>Soja</option>
+            <option>Girasol</option>
+            <option>Sorgo</option>
+          </select>
+        </label>
+        <label>Diametro del silo (m)<input name="diameter_m" type="number" step="0.1" value="18" required /></label>
+        <label>Altura cilindrica (m)<input name="height_m" type="number" step="0.1" value="18" required /></label>
+        <label>Latitud<input name="lat" type="number" step="0.000001" required /></label>
+        <label>Longitud<input name="lng" type="number" step="0.000001" required /></label>
+        <label>Llenado %<input name="fill_percent" type="number" step="1" value="65" /></label>
+        <label>Humedad grano %<input name="grain_humidity" type="number" step="0.1" value="14" /></label>
+        <label>Temperatura grano °C<input name="grain_temperature" type="number" step="0.1" value="20" /></label>
+      </div>
+      <div class="calculated-box" id="siloCalc"></div>
+      <div class="form-actions">
+        <button class="button" type="submit">Crear silo y calcular volumen</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="modal" id="dependencyModal" aria-hidden="true">
+    <form class="modal-card form-card" id="dependencyForm">
+      <div class="modal-head">
+        <h2>Nueva dependencia AFA</h2>
+        <button class="button secondary" type="button" data-close="dependencyModal">Cerrar</button>
+      </div>
+      <div class="form-grid">
+        <label>Tipo de sitio
+          <select name="site_type">
+            <option>CCP</option>
+            <option>Sub-Centro</option>
+            <option>Oficina Comercial</option>
+            <option>Representante</option>
+            <option>Otro Centro</option>
+            <option>Sitio AFA</option>
+          </select>
+        </label>
+        <label>CCP asociado<input name="ccp_associated" required placeholder="Maciel" /></label>
+        <label>Provincia<input name="province" required placeholder="Santa Fe" /></label>
+        <label>Departamento<input name="department" placeholder="San Jeronimo" /></label>
+        <label>Localidad<input name="town" required placeholder="Maciel" /></label>
+        <label>Direccion publicada<input name="published_address" placeholder="Bv Sarmiento 108" /></label>
+        <label>URL fuente<input name="source_url" placeholder="https://www.afascl.coop/..." /></label>
+        <label>Estado fuente<input name="source_status" value="Oficial AFA" /></label>
+        <label>Latitud<input name="lat" type="number" step="0.000001" /></label>
+        <label>Longitud<input name="lng" type="number" step="0.000001" /></label>
+        <label>Cantidad de silos<input name="silo_count" type="number" step="1" value="0" /></label>
+        <label>Capacidad total m³<input name="capacity_m3" type="number" step="1" value="0" /></label>
+      </div>
+      <div class="form-actions">
+        <button class="button" type="submit">Guardar dependencia</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="modal" id="userModal" aria-hidden="true">
+    <form class="modal-card form-card" id="userForm">
+      <div class="modal-head">
+        <h2>Nuevo usuario</h2>
+        <button class="button secondary" type="button" data-close="userModal">Cerrar</button>
+      </div>
+      <div class="form-grid">
+        <label>Nombre<input name="name" required placeholder="Operador CCP" /></label>
+        <label>Email<input name="email" type="email" required placeholder="usuario@afa.demo" /></label>
+        <label>Contraseña<input name="password" required value="demo123" /></label>
+        <label>Rol
+          <select name="role">
+            <option value="admin">Admin nacional</option>
+            <option value="ccp">Operador CCP</option>
+          </select>
+        </label>
+        <label>Puede ver
+          <select name="scope_type" id="userScopeType">
+            <option value="national">Toda la red nacional</option>
+            <option value="province">Una provincia</option>
+            <option value="site">Un establecimiento</option>
+          </select>
+        </label>
+        <label>Alcance
+          <select name="scope_value" id="userScopeValue"></select>
+        </label>
+      </div>
+      <div class="note" id="userFormMessage" hidden></div>
+      <div class="form-actions">
+        <button class="button" type="submit">Crear usuario</button>
+      </div>
+    </form>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="./src/app.js?v=real-maps-1"></script>
+</body>
+</html>
