@@ -200,6 +200,7 @@ label {
 .sidebar,
 .detail {
   overflow: auto;
+  overflow-x: hidden;
   background: var(--panel);
   backdrop-filter: blur(18px);
 }
@@ -692,11 +693,14 @@ a.button {
   grid-template-columns: 1fr 1fr;
   gap: 10px;
   margin-bottom: 16px;
+  min-width: 0;
 }
 
 .value-card {
   min-height: 76px;
   padding: 11px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .value-card strong {
