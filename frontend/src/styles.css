@@ -378,6 +378,23 @@ label {
   gap: 5px;
 }
 
+.check-row {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(2, 27, 11, .45);
+  color: var(--ink);
+}
+
+.check-row input {
+  width: 16px;
+  min-height: 16px;
+}
+
 select,
 input {
   width: 100%;
@@ -557,6 +574,22 @@ a.button {
   border-radius: 8px;
   background: linear-gradient(180deg, rgba(6, 73, 30, .74), rgba(2, 35, 14, .88));
   padding: 14px;
+}
+
+.permission-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.permission-row span {
+  padding: 4px 7px;
+  border: 1px solid rgba(164, 255, 193, .24);
+  border-radius: 999px;
+  color: var(--muted);
+  background: rgba(2, 27, 11, .54);
+  font-size: 11px;
 }
 
 .dashboard-card strong {

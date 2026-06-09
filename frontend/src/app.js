@@ -26,7 +26,7 @@ const riskOrder = ["Normal", "Atencion", "Riesgo", "Critico"];
 const riskLabels = { Normal: "Normal", Atencion: "Atencion", Riesgo: "Riesgo", Critico: "Critico" };
 const riskColors = { Normal: "#39ff88", Atencion: "#ffe35a", Riesgo: "#ff9a3d", Critico: "#ff4b5f" };
 const grainLimits = { Maiz: 14.1, Trigo: 14.0, Soja: 12.9, Girasol: 8.0, Sorgo: 15.6 };
-const sourceNote = "Demo con base SQLite local. La version productiva deberia importar plantas activas SISA/ARCA, CUIT, numero de planta y estado registral; luego relevar sobre imagen satelital el limite de cada acopio y la circunferencia real de cada silo.";
+const sourceNote = "Sistema con base PostgreSQL. La version productiva deberia importar plantas activas SISA/ARCA, CUIT, numero de planta y estado registral; luego relevar sobre imagen satelital el limite de cada acopio y la circunferencia real de cada silo.";
 
 const map = L.map("map", { zoomControl: false }).setView([-32.9, -61.4], 7);
 L.control.zoom({ position: "bottomright" }).addTo(map);
@@ -835,13 +835,22 @@ function renderUsers() {
         <div class="row">
           <div>
             <strong>${user.name}</strong>
-            <div class="site-meta">${user.email} - ${user.role === "admin" ? "Admin" : "Operador"} - ${scopeLabel}</div>
-            <div class="site-meta">${user.email} · ${user.role === "admin" ? "Admin nacional" : "Operador CCP"}${site ? ` · ${site.name}` : ""}</div>
+            <div class="site-meta">${user.email} - ${user.role === "admin" ? "Admin nacional" : "Operador CCP"} - ${scopeLabel}</div>
+            <div class="permission-row">${permissionLabels(user.permissions).map(label => `<span>${label}</span>`).join("")}</div>
           </div>
           <span class="chip ${user.active ? "normal" : "riesgo"}">${user.active ? "Activo" : "Inactivo"}</span>
         </div>
       </article>`;
   }).join("");
+}
+
+function permissionLabels(permissions = {}) {
+  const labels = [];
+  if (permissions.editSites) labels.push("Editar establecimientos");
+  if (permissions.editSilos) labels.push("Editar silos");
+  if (permissions.manageUsers) labels.push("Usuarios");
+  if (permissions.exportReports) labels.push("Informes");
+  return labels.length ? labels : ["Solo lectura"];
 }
 
 function populateUserScopeSelect() {
@@ -1258,9 +1267,17 @@ function formPayload(form) {
   }, {});
 }
 
+function withActor(payload = {}) {
+  return {
+    ...payload,
+    actor_user_id: state.currentUser?.id,
+    actor_email: state.currentUser?.email
+  };
+}
+
 async function submitSite(event) {
   event.preventDefault();
-  const payload = formPayload(event.currentTarget);
+  const payload = withActor(formPayload(event.currentTarget));
   const response = await fetch("/api/sites", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1274,7 +1291,7 @@ async function submitSite(event) {
 
 async function submitDependency(event) {
   event.preventDefault();
-  const payload = formPayload(event.currentTarget);
+  const payload = withActor(formPayload(event.currentTarget));
   payload.parent_site_id = findParentSiteId(payload.ccp_associated);
   if (!payload.lat) delete payload.lat;
   if (!payload.lng) delete payload.lng;
@@ -1290,7 +1307,7 @@ async function submitDependency(event) {
 
 async function submitUser(event) {
   event.preventDefault();
-  const payload = formPayload(event.currentTarget);
+  const payload = withActor(formPayload(event.currentTarget));
   const message = document.getElementById("userFormMessage");
   message.hidden = true;
   if (payload.scope_type === "national") delete payload.scope_value;
@@ -1325,7 +1342,7 @@ async function submitSilo(event) {
   const form = event.currentTarget;
   const siteId = form.dataset.siteId || state.selectedSiteId;
   const siloId = form.dataset.siloId;
-  const payload = formPayload(form);
+  const payload = withActor(formPayload(form));
   payload.internal_humidity = payload.internal_humidity || 58;
   payload.internal_temperature = payload.grain_temperature - 1;
   const response = await fetch(siloId ? `/api/silos/${siloId}` : `/api/sites/${siteId}/silos`, {
@@ -1520,7 +1537,7 @@ async function toggleBoundary(site) {
     const response = await fetch(`/api/sites/${site.id}/boundary`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ boundary: points })
+      body: JSON.stringify(withActor({ boundary: points }))
     });
     if (!response.ok) throw new Error(await response.text());
     state.drawingBoundarySiteId = null;
@@ -1687,7 +1704,7 @@ async function promptSiteMetadata(site) {
   const response = await fetch(`/api/sites/${site.id}/metadata`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ address, phone, email, region })
+    body: JSON.stringify(withActor({ address, phone, email, region }))
   });
   if (!response.ok) throw new Error(await response.text());
   await refreshData(site.id, state.selectedSiloId);
@@ -1697,7 +1714,7 @@ async function updateSiteLocation(siteId, lat, lng, source) {
   const response = await fetch(`/api/sites/${siteId}/location`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ lat, lng, location_source: source })
+    body: JSON.stringify(withActor({ lat, lng, location_source: source }))
   });
   if (!response.ok) throw new Error(await response.text());
   await refreshData(siteId, state.selectedSiloId);

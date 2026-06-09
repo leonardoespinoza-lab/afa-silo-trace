@@ -4,7 +4,11 @@ import json
 import math
 import os
 import csv
-import sqlite3
+import psycopg
+from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -13,11 +17,12 @@ from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_DIR = ROOT / "frontend"
-DB_PATH = ROOT / "backend" / "data" / "afa_silo_trace.db"
-SCHEMA_PATH = ROOT / "db" / "schema.sql"
+DATABASE_URL = os.getenv("DATABASE_URL")
+SCHEMA_PATH = ROOT / "db" / "schema_postgres.sql"
 RED_AFA_SEED_PATH = ROOT / "db" / "red_afa_seed.csv"
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8788"))
+WEATHER_REFRESH_MINUTES = int(os.getenv("WEATHER_REFRESH_MINUTES", "15"))
 
 GRAINS = {
     "Maiz": {"safe_humidity": 14.1, "density": 0.72},
@@ -57,12 +62,40 @@ SITES = [
 ]
 
 
-def connect() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+class PgConnection:
+    def __init__(self):
+        if not DATABASE_URL:
+            raise RuntimeError("DATABASE_URL is required. Configure PostgreSQL before starting AFA Silo Trace.")
+        self.conn = psycopg.connect(DATABASE_URL, row_factory=dict_row)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type:
+            self.conn.rollback()
+        self.conn.close()
+
+    def execute(self, sql: str, params: tuple | list | None = None):
+        return self.conn.execute(sql.replace("?", "%s"), params)
+
+    def executemany(self, sql: str, params):
+        with self.conn.cursor() as cur:
+            cur.executemany(sql.replace("?", "%s"), params)
+            return cur
+
+    def executescript(self, sql: str):
+        for statement in sql.split(";"):
+            statement = statement.strip()
+            if statement:
+                self.conn.execute(statement)
+
+    def commit(self):
+        self.conn.commit()
+
+
+def connect() -> PgConnection:
+    return PgConnection()
 
 
 def seeded(seed: int):
@@ -102,13 +135,9 @@ def dew_point(temp: float, humidity: float) -> float:
 def init_db() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
-        ensure_site_columns(conn)
-        ensure_geometry_columns(conn)
-        ensure_dependencies_table(conn)
-        ensure_users_table(conn)
-        site_count = conn.execute("SELECT COUNT(*) FROM sites").fetchone()[0]
+        site_count = conn.execute("SELECT COUNT(*) AS count FROM sites").fetchone()["count"]
         if site_count:
-            dependency_count = conn.execute("SELECT COUNT(*) FROM dependencies").fetchone()[0]
+            dependency_count = conn.execute("SELECT COUNT(*) AS count FROM dependencies").fetchone()["count"]
             if dependency_count == 0:
                 seed_dependencies(conn)
             seed_red_afa(conn)
@@ -120,108 +149,27 @@ def init_db() -> None:
         seed_users(conn)
 
 
-def ensure_site_columns(conn: sqlite3.Connection) -> None:
-    columns = {row["name"] for row in conn.execute("PRAGMA table_info(sites)").fetchall()}
-    additions = {
-        "cuit": "ALTER TABLE sites ADD COLUMN cuit TEXT",
-        "plant_number": "ALTER TABLE sites ADD COLUMN plant_number TEXT",
-        "registry_status": "ALTER TABLE sites ADD COLUMN registry_status TEXT DEFAULT 'Pendiente SISA/ARCA'",
-        "address": "ALTER TABLE sites ADD COLUMN address TEXT",
-        "location_source": "ALTER TABLE sites ADD COLUMN location_source TEXT DEFAULT 'Centro localidad'",
-        "region": "ALTER TABLE sites ADD COLUMN region TEXT",
-        "phone": "ALTER TABLE sites ADD COLUMN phone TEXT",
-        "email": "ALTER TABLE sites ADD COLUMN email TEXT",
-        "coord_maps": "ALTER TABLE sites ADD COLUMN coord_maps TEXT",
-        "maps_url": "ALTER TABLE sites ADD COLUMN maps_url TEXT",
-        "directions_url": "ALTER TABLE sites ADD COLUMN directions_url TEXT",
-        "original_lat": "ALTER TABLE sites ADD COLUMN original_lat TEXT",
-        "original_lng": "ALTER TABLE sites ADD COLUMN original_lng TEXT",
-        "source_file": "ALTER TABLE sites ADD COLUMN source_file TEXT",
-        "boundary_geojson": "ALTER TABLE sites ADD COLUMN boundary_geojson TEXT",
-    }
-    for column, sql in additions.items():
-        if column not in columns:
-            conn.execute(sql)
-    conn.commit()
-
-
-def ensure_geometry_columns(conn: sqlite3.Connection) -> None:
-    columns = {row["name"] for row in conn.execute("PRAGMA table_info(silos)").fetchall()}
-    if "diameter_m" not in columns:
-        conn.execute("ALTER TABLE silos ADD COLUMN diameter_m REAL NOT NULL DEFAULT 18")
-    if "height_m" not in columns:
-        conn.execute("ALTER TABLE silos ADD COLUMN height_m REAL NOT NULL DEFAULT 18")
-    conn.commit()
-
-
-def ensure_dependencies_table(conn: sqlite3.Connection) -> None:
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS dependencies (
-          id TEXT PRIMARY KEY,
-          parent_site_id TEXT REFERENCES sites(id) ON DELETE SET NULL,
-          site_type TEXT NOT NULL,
-          province TEXT NOT NULL,
-          department TEXT,
-          town TEXT NOT NULL,
-          published_address TEXT,
-          ccp_associated TEXT,
-          source_url TEXT,
-          source_status TEXT DEFAULT 'Oficial AFA',
-          lat REAL,
-          lng REAL,
-          location_source TEXT DEFAULT 'Pendiente georreferenciar',
-          silo_count INTEGER DEFAULT 0,
-          capacity_m3 INTEGER DEFAULT 0,
-          notes TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_dependencies_parent ON dependencies(parent_site_id);
-        CREATE INDEX IF NOT EXISTS idx_dependencies_filters ON dependencies(site_type, province, town, ccp_associated);
-        """
-    )
-    conn.commit()
-
-
-def ensure_users_table(conn: sqlite3.Connection) -> None:
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS users (
-          id TEXT PRIMARY KEY,
-          name TEXT NOT NULL,
-          email TEXT NOT NULL UNIQUE,
-          password TEXT NOT NULL,
-          role TEXT NOT NULL,
-          site_id TEXT REFERENCES sites(id) ON DELETE SET NULL,
-          active INTEGER NOT NULL DEFAULT 1
-        );
-        CREATE INDEX IF NOT EXISTS idx_users_site ON users(site_id);
-        """
-    )
-    columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
-    if "scope_type" not in columns:
-        conn.execute("ALTER TABLE users ADD COLUMN scope_type TEXT NOT NULL DEFAULT 'site'")
-    if "scope_value" not in columns:
-        conn.execute("ALTER TABLE users ADD COLUMN scope_value TEXT")
-    conn.execute("UPDATE users SET scope_type = 'national', scope_value = NULL WHERE role = 'admin' AND (scope_value IS NULL OR scope_value = '')")
-    conn.execute("UPDATE users SET scope_type = 'site', scope_value = site_id WHERE role <> 'admin' AND site_id IS NOT NULL AND (scope_value IS NULL OR scope_value = '')")
-    conn.commit()
-
-
-def seed_users(conn: sqlite3.Connection) -> None:
+def seed_users(conn) -> None:
     users = [
         ("user-admin", "Administrador Nacional", "admin@afa.demo", "admin123", "admin", None, 1),
         ("user-arrecifes", "Operador CCP Arrecifes", "arrecifes@afa.demo", "arrecifes123", "ccp", "afa-arrecifes", 1),
     ]
     conn.executemany(
-        "INSERT OR IGNORE INTO users (id, name, email, password, role, site_id, active) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        """
+        INSERT INTO users (id, name, email, password, role, site_id, active)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (id) DO NOTHING
+        """,
         users,
     )
     conn.execute("UPDATE users SET scope_type = 'national', scope_value = NULL WHERE id = 'user-admin'")
     conn.execute("UPDATE users SET scope_type = 'site', scope_value = 'afa-arrecifes' WHERE id = 'user-arrecifes'")
+    conn.execute("UPDATE users SET can_view = 1, can_edit_sites = 1, can_edit_silos = 1, can_manage_users = 1, can_export_reports = 1 WHERE id = 'user-admin'")
+    conn.execute("UPDATE users SET can_view = 1, can_edit_sites = 0, can_edit_silos = 1, can_manage_users = 0, can_export_reports = 1 WHERE id = 'user-arrecifes'")
     conn.commit()
 
 
-def seed_dependencies(conn: sqlite3.Connection) -> None:
+def seed_dependencies(conn) -> None:
     demo_rows = [
         ("dep-maciel-aldao", "afa-maciel", "Sub-Centro", "Santa Fe", "San Lorenzo", "Aldao", None, "Maciel", "https://www.afascl.coop", "Oficial AFA", None, None, "Pendiente georreferenciar", 0, 0, "Sub-centro asociado informado en ficha Maciel."),
         ("dep-maciel-carrizales", "afa-maciel", "Sub-Centro", "Santa Fe", "Iriondo", "Carrizales", None, "Maciel", "https://www.afascl.coop", "Oficial AFA", None, None, "Pendiente georreferenciar", 0, 0, "Sub-centro asociado informado en ficha Maciel."),
@@ -233,18 +181,19 @@ def seed_dependencies(conn: sqlite3.Connection) -> None:
     ]
     conn.executemany(
         """
-        INSERT OR IGNORE INTO dependencies (
+        INSERT INTO dependencies (
           id, parent_site_id, site_type, province, department, town, published_address,
           ccp_associated, source_url, source_status, lat, lng, location_source,
           silo_count, capacity_m3, notes
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (id) DO NOTHING
         """,
         demo_rows,
     )
     conn.commit()
 
 
-def seed_red_afa(conn: sqlite3.Connection) -> None:
+def seed_red_afa(conn) -> None:
     if not RED_AFA_SEED_PATH.exists():
         return
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -315,11 +264,12 @@ def seed_red_afa(conn: sqlite3.Connection) -> None:
             site_id = f"red-afa-{slugify(town)}-{slugify(province)}"
             conn.execute(
                 """
-                INSERT OR IGNORE INTO sites (
+                INSERT INTO sites (
                   id, name, province, department, town, lat, lng, cuit, plant_number,
                   registry_status, address, location_source, region, phone, email,
                   coord_maps, maps_url, directions_url, original_lat, original_lng, source_file
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO NOTHING
                 """,
                 (
                     site_id,
@@ -413,7 +363,7 @@ def seed_red_afa(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def seed_demo(conn: sqlite3.Connection) -> None:
+def seed_demo(conn) -> None:
     now = datetime.now(timezone.utc).replace(microsecond=0)
     conn.executemany(
         """
@@ -726,7 +676,7 @@ def insert_dependency(payload: dict) -> dict:
     return {"ok": True, "dependencyId": dependency_id}
 
 
-def public_user(row: sqlite3.Row) -> dict:
+def public_user(row: dict) -> dict:
     return {
         "id": row["id"],
         "name": row["name"],
@@ -736,6 +686,51 @@ def public_user(row: sqlite3.Row) -> dict:
         "scopeType": row["scope_type"],
         "scopeValue": row["scope_value"],
         "active": bool(row["active"]),
+        "permissions": {
+            "view": bool(row.get("can_view", 1)),
+            "editSites": bool(row.get("can_edit_sites", 0)),
+            "editSilos": bool(row.get("can_edit_silos", 0)),
+            "manageUsers": bool(row.get("can_manage_users", 0)),
+            "exportReports": bool(row.get("can_export_reports", 1)),
+        },
+    }
+
+
+def write_audit(
+    conn,
+    action: str,
+    entity_type: str,
+    entity_id: str,
+    site_id: str | None,
+    before_data: dict | None,
+    after_data: dict | None,
+    actor: dict | None = None,
+) -> None:
+    actor = actor or {}
+    conn.execute(
+        """
+        INSERT INTO audit_log (
+          actor_user_id, actor_email, action, entity_type, entity_id,
+          site_id, before_data, after_data
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            actor.get("userId") or actor.get("actor_user_id"),
+            actor.get("email") or actor.get("actor_email"),
+            action,
+            entity_type,
+            entity_id,
+            site_id,
+            Jsonb(before_data) if before_data is not None else None,
+            Jsonb(after_data) if after_data is not None else None,
+        ),
+    )
+
+
+def actor_from_payload(payload: dict) -> dict:
+    return {
+        "userId": payload.get("actor_user_id") or payload.get("user_id"),
+        "email": payload.get("actor_email") or payload.get("email_actor"),
     }
 
 
@@ -744,7 +739,12 @@ def login_user(payload: dict) -> dict:
     password = payload.get("password", "")
     with connect() as conn:
         row = conn.execute(
-            "SELECT id, name, email, role, site_id, scope_type, scope_value, active FROM users WHERE lower(email) = ? AND password = ? AND active = 1",
+            """
+            SELECT id, name, email, role, site_id, scope_type, scope_value, active,
+              can_view, can_edit_sites, can_edit_silos, can_manage_users, can_export_reports
+            FROM users
+            WHERE lower(email) = ? AND password = ? AND active = 1
+            """,
             (email, password),
         ).fetchone()
     if not row:
@@ -754,7 +754,14 @@ def login_user(payload: dict) -> dict:
 
 def list_users() -> list[dict]:
     with connect() as conn:
-        rows = conn.execute("SELECT id, name, email, role, site_id, scope_type, scope_value, active FROM users ORDER BY role, name").fetchall()
+        rows = conn.execute(
+            """
+            SELECT id, name, email, role, site_id, scope_type, scope_value, active,
+              can_view, can_edit_sites, can_edit_silos, can_manage_users, can_export_reports
+            FROM users
+            ORDER BY role, name
+            """
+        ).fetchall()
     return [public_user(row) for row in rows]
 
 
@@ -772,11 +779,19 @@ def insert_user(payload: dict) -> dict:
         site_id = None
     if scope_type in {"province", "site"} and not scope_value:
         raise ValueError("Debe elegir el alcance del usuario")
+    is_admin = payload["role"] == "admin"
+    can_view = int(payload.get("can_view", 1))
+    can_edit_sites = int(payload.get("can_edit_sites", 1 if is_admin else 0))
+    can_edit_silos = int(payload.get("can_edit_silos", 1 if is_admin else 1))
+    can_manage_users = int(payload.get("can_manage_users", 1 if is_admin else 0))
+    can_export_reports = int(payload.get("can_export_reports", 1))
     with connect() as conn:
         conn.execute(
             """
-            INSERT INTO users (id, name, email, password, role, site_id, scope_type, scope_value, active)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO users (
+              id, name, email, password, role, site_id, scope_type, scope_value, active,
+              can_view, can_edit_sites, can_edit_silos, can_manage_users, can_export_reports
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user_id,
@@ -788,6 +803,11 @@ def insert_user(payload: dict) -> dict:
                 scope_type,
                 scope_value,
                 int(payload.get("active", 1)),
+                can_view,
+                can_edit_sites,
+                can_edit_silos,
+                can_manage_users,
+                can_export_reports,
             ),
         )
         conn.commit()
@@ -876,12 +896,14 @@ def update_site_location(site_id: str, payload: dict) -> dict:
     lng = float(payload["lng"])
     source = payload.get("location_source", "Relevamiento satelital")
     with connect() as conn:
+        before = conn.execute("SELECT * FROM sites WHERE id = ?", (site_id,)).fetchone()
         cur = conn.execute(
             "UPDATE sites SET lat = ?, lng = ?, location_source = ? WHERE id = ?",
             (lat, lng, source, site_id),
         )
         if cur.rowcount == 0:
             raise KeyError("Site not found")
+        write_audit(conn, "update_location", "site", site_id, site_id, dict(before) if before else None, {"lat": lat, "lng": lng, "locationSource": source}, actor_from_payload(payload))
         conn.commit()
     return {"ok": True, "siteId": site_id, "lat": lat, "lng": lng, "locationSource": source}
 
@@ -895,9 +917,11 @@ def update_site_metadata(site_id: str, payload: dict) -> dict:
     values = [payload[field] for field in fields]
     values.append(site_id)
     with connect() as conn:
+        before = conn.execute("SELECT * FROM sites WHERE id = ?", (site_id,)).fetchone()
         cur = conn.execute(f"UPDATE sites SET {assignments} WHERE id = ?", values)
         if cur.rowcount == 0:
             raise KeyError("Site not found")
+        write_audit(conn, "update_metadata", "site", site_id, site_id, dict(before) if before else None, {field: payload[field] for field in fields}, actor_from_payload(payload))
         conn.commit()
     return {"ok": True, "siteId": site_id}
 
@@ -910,12 +934,14 @@ def update_site_boundary(site_id: str, payload: dict) -> dict:
     for point in points:
         normalized.append({"lat": float(point["lat"]), "lng": float(point["lng"])})
     with connect() as conn:
+        before = conn.execute("SELECT id, boundary_geojson FROM sites WHERE id = ?", (site_id,)).fetchone()
         cur = conn.execute(
             "UPDATE sites SET boundary_geojson = ?, location_source = ? WHERE id = ?",
             (json.dumps(normalized), "Limite dibujado por usuario", site_id),
         )
         if cur.rowcount == 0:
             raise KeyError("Site not found")
+        write_audit(conn, "update_boundary", "site", site_id, site_id, dict(before) if before else None, {"boundary": normalized}, actor_from_payload(payload))
         conn.commit()
     return {"ok": True, "siteId": site_id, "boundary": normalized}
 
@@ -994,21 +1020,33 @@ def insert_silo(site_id: str, payload: dict) -> dict:
                 tons,
             ),
         )
+        write_audit(
+            conn,
+            "create",
+            "silo",
+            silo_id,
+            site_id,
+            None,
+            {"code": payload["code"], "lat": float(payload["lat"]), "lng": float(payload["lng"]), "diameter": diameter, "height": height},
+            actor_from_payload(payload),
+        )
         conn.commit()
     return {"ok": True, "siloId": silo_id, "capacityM3": capacity, "estimatedTons": tons}
 
 
 def update_silo(silo_id: str, payload: dict) -> dict:
     with connect() as conn:
-        current = conn.execute("SELECT site_id FROM silos WHERE id = ?", (silo_id,)).fetchone()
+        current = conn.execute("SELECT * FROM silos WHERE id = ?", (silo_id,)).fetchone()
         if not current:
             raise KeyError("Silo not found")
+        before = dict(current)
     data = {**payload, "id": silo_id}
     with connect() as conn:
         silo = conn.execute("SELECT site_id FROM silos WHERE id = ?", (silo_id,)).fetchone()
         site_id = silo["site_id"]
         conn.execute("DELETE FROM telemetry WHERE silo_id = ?", (silo_id,))
         conn.execute("DELETE FROM silos WHERE id = ?", (silo_id,))
+        write_audit(conn, "update", "silo", silo_id, site_id, before, data, actor_from_payload(payload))
         conn.commit()
     result = insert_silo(site_id, data)
     return {"ok": True, "siloId": result["siloId"]}
@@ -1016,10 +1054,12 @@ def update_silo(silo_id: str, payload: dict) -> dict:
 
 def delete_silo(silo_id: str) -> dict:
     with connect() as conn:
+        before = conn.execute("SELECT * FROM silos WHERE id = ?", (silo_id,)).fetchone()
         conn.execute("DELETE FROM telemetry WHERE silo_id = ?", (silo_id,))
         cur = conn.execute("DELETE FROM silos WHERE id = ?", (silo_id,))
         if cur.rowcount == 0:
             raise KeyError("Silo not found")
+        write_audit(conn, "delete", "silo", silo_id, before["site_id"] if before else None, dict(before) if before else None, None, {})
         conn.commit()
     return {"ok": True, "siloId": silo_id}
 
@@ -1164,6 +1204,109 @@ def open_meteo_series(site_id: str) -> dict:
     }
 
 
+def persist_weather_series(site_id: str) -> dict:
+    payload = open_meteo_series(site_id)
+    series = payload["series"]
+    now = datetime.now(timezone.utc)
+    current_rows = [row for row in series if parse_weather_time(row["time"]) <= now]
+    latest = current_rows[-1] if current_rows else (series[0] if series else None)
+    with connect() as conn:
+        if latest:
+            conn.execute(
+                """
+                INSERT INTO weather (
+                  site_id, recorded_at, external_temperature, external_humidity,
+                  dew_point, wind_kmh, pressure_hpa, rain_mm, source
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (site_id, recorded_at, source) DO UPDATE SET
+                  external_temperature = EXCLUDED.external_temperature,
+                  external_humidity = EXCLUDED.external_humidity,
+                  dew_point = EXCLUDED.dew_point,
+                  wind_kmh = EXCLUDED.wind_kmh,
+                  pressure_hpa = EXCLUDED.pressure_hpa,
+                  rain_mm = EXCLUDED.rain_mm
+                """,
+                (
+                    site_id,
+                    latest["time"],
+                    latest["temperature"] or 0,
+                    latest["humidity"] or 0,
+                    latest["dewPoint"] or 0,
+                    latest["wind"] or 0,
+                    latest["pressure"] or 0,
+                    latest["rain"] or 0,
+                    "Open-Meteo",
+                ),
+            )
+        for row in series:
+            if parse_weather_time(row["time"]) < now:
+                continue
+            conn.execute(
+                """
+                INSERT INTO weather_forecasts (
+                  site_id, forecast_for, external_temperature, external_humidity,
+                  dew_point, wind_kmh, wind_gust_kmh, pressure_hpa, rain_mm, source
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (site_id, forecast_for, source) DO UPDATE SET
+                  fetched_at = now(),
+                  external_temperature = EXCLUDED.external_temperature,
+                  external_humidity = EXCLUDED.external_humidity,
+                  dew_point = EXCLUDED.dew_point,
+                  wind_kmh = EXCLUDED.wind_kmh,
+                  wind_gust_kmh = EXCLUDED.wind_gust_kmh,
+                  pressure_hpa = EXCLUDED.pressure_hpa,
+                  rain_mm = EXCLUDED.rain_mm
+                """,
+                (
+                    site_id,
+                    row["time"],
+                    row["temperature"],
+                    row["humidity"],
+                    row["dewPoint"],
+                    row["wind"],
+                    row["gusts"],
+                    row["pressure"],
+                    row["rain"],
+                    "Open-Meteo",
+                ),
+            )
+        conn.commit()
+    return {"siteId": site_id, "points": len(series), "source": payload["source"]}
+
+
+def refresh_weather_all_sites(limit: int | None = None) -> dict:
+    with connect() as conn:
+        rows = conn.execute("SELECT id FROM sites ORDER BY province, town").fetchall()
+    refreshed = []
+    errors = []
+    for row in rows[:limit] if limit else rows:
+        try:
+            refreshed.append(persist_weather_series(row["id"]))
+        except Exception as exc:
+            errors.append({"siteId": row["id"], "error": str(exc)})
+    return {"ok": True, "refreshed": len(refreshed), "errors": errors[:12]}
+
+
+def start_weather_scheduler() -> None:
+    def worker():
+        while True:
+            try:
+                refresh_weather_all_sites()
+            except Exception as exc:
+                print(f"weather refresh failed: {exc}")
+            time.sleep(max(1, WEATHER_REFRESH_MINUTES) * 60)
+
+    thread = threading.Thread(target=worker, name="weather-refresh", daemon=True)
+    thread.start()
+
+
+def parse_weather_time(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(FRONTEND_DIR), **kwargs)
@@ -1182,7 +1325,7 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/health":
-            self.send_json({"ok": True, "db": str(DB_PATH), "generatedAt": datetime.now(timezone.utc).isoformat()})
+            self.send_json({"ok": True, "db": "postgresql", "weatherRefreshMinutes": WEATHER_REFRESH_MINUTES, "generatedAt": datetime.now(timezone.utc).isoformat()})
             return
         if parsed.path == "/api/sites":
             self.send_json({"sites": latest_sites()})
@@ -1221,6 +1364,9 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/login":
                 self.send_json(login_user(payload))
+                return
+            if parsed.path == "/api/weather/refresh":
+                self.send_json(refresh_weather_all_sites(limit=payload.get("limit")))
                 return
             if parsed.path == "/api/users":
                 self.send_json(insert_user(payload), status=201)
@@ -1291,5 +1437,6 @@ class Handler(SimpleHTTPRequestHandler):
 
 if __name__ == "__main__":
     init_db()
-    print(f"AFA Silo Trace demo running at http://127.0.0.1:{PORT}")
+    start_weather_scheduler()
+    print(f"AFA Silo Trace running at http://127.0.0.1:{PORT} with PostgreSQL and {WEATHER_REFRESH_MINUTES} min weather refresh")
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
