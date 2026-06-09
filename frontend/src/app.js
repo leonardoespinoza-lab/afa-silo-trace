@@ -436,6 +436,10 @@ function plantLayout(site) {
     const col = index % perRow;
     const x = (col - centerIndex) * spacing;
     const y = (row - centerRow) * rowGap;
+    if (silo.lat !== null && silo.lng !== null && Number.isFinite(Number(silo.lat)) && Number.isFinite(Number(silo.lng))) {
+      const realOffset = metersFromLatLng(site.lat, site.lng, Number(silo.lat), Number(silo.lng));
+      return { silo, lat: Number(silo.lat), lng: Number(silo.lng), x: realOffset.x, y: realOffset.y };
+    }
     const rotatedX = x * Math.cos(heading) - y * Math.sin(heading);
     const rotatedY = x * Math.sin(heading) + y * Math.cos(heading);
     const point = offsetLatLng(site.lat, site.lng, rotatedX, rotatedY);
@@ -467,6 +471,21 @@ function offsetLatLng(lat, lng, eastMeters, northMeters) {
     lat: lat + (northMeters / 111320),
     lng: lng + (eastMeters / (111320 * Math.cos(lat * Math.PI / 180)))
   };
+}
+
+function metersFromLatLng(originLat, originLng, lat, lng) {
+  return {
+    x: (lng - originLng) * 111320 * Math.cos(originLat * Math.PI / 180),
+    y: (lat - originLat) * 111320
+  };
+}
+
+function suggestedSiloPoint(site) {
+  const index = site.silos.length;
+  const col = index % 4;
+  const row = Math.floor(index / 4);
+  const point = offsetLatLng(site.lat, site.lng, (col - 1.5) * 30, 35 + row * 34);
+  return { lat: point.lat, lng: point.lng };
 }
 
 function hashCode(text) {
@@ -1017,6 +1036,7 @@ function openSiloForm(site, point = null, silo = null) {
     activeSiloLayer.remove();
     activeSiloLayer = null;
   }
+  const suggestedPoint = point || (silo ? null : suggestedSiloPoint(site));
   form.reset();
   form.dataset.siteId = site.id;
   form.dataset.siloId = silo?.id || "";
@@ -1024,8 +1044,8 @@ function openSiloForm(site, point = null, silo = null) {
   form.elements.grain.value = silo?.grain || "Maiz";
   form.elements.diameter_m.value = silo?.diameter || 18;
   form.elements.height_m.value = silo?.height || 18;
-  form.elements.lat.value = (point?.lat ?? silo?.lat ?? site.lat + 0.00025).toFixed(6);
-  form.elements.lng.value = (point?.lng ?? silo?.lng ?? site.lng + 0.00025).toFixed(6);
+  form.elements.lat.value = (suggestedPoint?.lat ?? silo?.lat ?? site.lat + 0.00025).toFixed(6);
+  form.elements.lng.value = (suggestedPoint?.lng ?? silo?.lng ?? site.lng + 0.00025).toFixed(6);
   form.elements.fill_percent.value = silo?.fill || 65;
   form.elements.grain_humidity.value = silo?.humidity || 14;
   form.elements.grain_temperature.value = silo?.temp || 20;
