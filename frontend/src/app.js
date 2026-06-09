@@ -330,13 +330,7 @@ function renderMap() {
   const bounds = [];
   sites.forEach(site => {
     const agg = aggregate(site);
-    const siteMarker = L.circleMarker([site.lat, site.lng], {
-      radius: 13,
-      color: "#f4f542",
-      weight: 3,
-      fillColor: riskColors[agg.worst],
-      fillOpacity: .96
-    }).addTo(siteLayer);
+    const siteMarker = L.marker([site.lat, site.lng], { icon: sitePinIcon(agg.worst) }).addTo(siteLayer);
     siteMarker.bindPopup(`<div class="popup-title">${site.name}</div><div>${site.town}, ${site.province}</div><div>${agg.silos.length} silos · ${agg.tons.toLocaleString("es-AR")} t</div><div>Clima: ${site.weather.externalHumidity}% HR ext.</div>`);
     siteMarker.bindTooltip(site.name, { direction: "top", offset: [0, -12], opacity: .92 });
     siteMarker.on("click", () => selectSite(site.id));
@@ -381,6 +375,7 @@ function renderMap() {
       });
     }
   });
+  /*
   filteredDependencies().forEach(dep => {
     if (dep.lat == null || dep.lng == null) return;
     const marker = L.circleMarker([dep.lat, dep.lng], {
@@ -398,12 +393,24 @@ function renderMap() {
     });
     bounds.push([dep.lat, dep.lng]);
   });
+  */
   const selected = state.sites.find(site => site.id === state.selectedSiteId) || sites[0];
   if (selected) {
     map.setView([selected.lat, selected.lng], 17, { animate: false });
   } else if (bounds.length) {
     map.fitBounds(bounds, { padding: [36, 36], maxZoom: 10 });
   }
+}
+
+function sitePinIcon(status) {
+  const color = riskColors[status] || riskColors.Normal;
+  return L.divIcon({
+    className: "site-pin",
+    html: `<span style="--pin-color:${color}"></span>`,
+    iconSize: [30, 38],
+    iconAnchor: [15, 36],
+    popupAnchor: [0, -32]
+  });
 }
 
 function plantLayout(site) {
@@ -774,6 +781,8 @@ function renderDetail() {
     </div>
 
     <div class="button-row">
+      <button class="button secondary" id="editSilo">Editar silo</button>
+      <button class="button secondary" id="deleteSilo">Eliminar silo</button>
       <button class="button" id="toggleMotor">${silo.motorOn ? "Apagar aireador" : "Encender aireador"}</button>
       <button class="button secondary" id="makeReport">Generar informe</button>
     </div>
@@ -791,6 +800,8 @@ function renderDetail() {
   document.getElementById("drawBoundary").addEventListener("click", () => toggleBoundary(site));
   document.getElementById("undoBoundary")?.addEventListener("click", () => undoBoundaryPoint(site));
   document.getElementById("cancelBoundary")?.addEventListener("click", () => cancelBoundary(site));
+  document.getElementById("editSilo").addEventListener("click", () => openSiloForm(site, null, silo));
+  document.getElementById("deleteSilo").addEventListener("click", () => deleteSelectedSilo(site, silo));
   document.getElementById("toggleMotor").addEventListener("click", () => {
     silo.motorOn = !silo.motorOn;
     renderAll();
@@ -975,13 +986,20 @@ function selectedSite() {
   return state.sites.find(site => site.id === state.selectedSiteId) || state.sites[0];
 }
 
-function openSiloForm(site, point = null) {
+function openSiloForm(site, point = null, silo = null) {
   const form = document.getElementById("siloForm");
   form.reset();
-  form.elements.code.value = `S-${site.town.slice(0, 3).toUpperCase()}-${String(site.silos.length + 1).padStart(2, "0")}`;
-  form.elements.lat.value = (point?.lat ?? site.lat + 0.00025).toFixed(6);
-  form.elements.lng.value = (point?.lng ?? site.lng + 0.00025).toFixed(6);
   form.dataset.siteId = site.id;
+  form.dataset.siloId = silo?.id || "";
+  form.elements.code.value = silo?.code || `S-${site.town.slice(0, 3).toUpperCase()}-${String(site.silos.length + 1).padStart(2, "0")}`;
+  form.elements.grain.value = silo?.grain || "Maiz";
+  form.elements.diameter_m.value = silo?.diameter || 18;
+  form.elements.height_m.value = silo?.height || 18;
+  form.elements.lat.value = (point?.lat ?? silo?.lat ?? site.lat + 0.00025).toFixed(6);
+  form.elements.lng.value = (point?.lng ?? silo?.lng ?? site.lng + 0.00025).toFixed(6);
+  form.elements.fill_percent.value = silo?.fill || 65;
+  form.elements.grain_humidity.value = silo?.humidity || 14;
+  form.elements.grain_temperature.value = silo?.temp || 20;
   updateSiloCalculation();
   drawPendingSiloCircle();
   openModal("siloModal");
@@ -1061,11 +1079,12 @@ async function submitSilo(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const siteId = form.dataset.siteId || state.selectedSiteId;
+  const siloId = form.dataset.siloId;
   const payload = formPayload(form);
   payload.internal_humidity = payload.internal_humidity || 58;
   payload.internal_temperature = payload.grain_temperature - 1;
-  const response = await fetch(`/api/sites/${siteId}/silos`, {
-    method: "POST",
+  const response = await fetch(siloId ? `/api/silos/${siloId}` : `/api/sites/${siteId}/silos`, {
+    method: siloId ? "PATCH" : "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
   });
@@ -1077,7 +1096,15 @@ async function submitSilo(event) {
     activeSiloLayer = null;
   }
   state.drawingSiloSiteId = null;
-  await refreshData(siteId, result.siloId);
+  delete form.dataset.siloId;
+  await refreshData(siteId, result.siloId || siloId);
+}
+
+async function deleteSelectedSilo(site, silo) {
+  if (!confirm(`Eliminar ${silo.code}?`)) return;
+  const response = await fetch(`/api/silos/${silo.id}`, { method: "DELETE" });
+  if (!response.ok) throw new Error(await response.text());
+  await refreshData(site.id, null);
 }
 
 async function refreshData(siteId = state.selectedSiteId, siloId = state.selectedSiloId) {
@@ -1135,11 +1162,11 @@ async function savePendingLocation(site) {
 function beginSiloMapPick() {
   const form = document.getElementById("siloForm");
   const siteId = form.dataset.siteId || state.selectedSiteId;
+  closeModal("siloModal");
   state.drawingSiloSiteId = siteId;
   state.locatingSiteId = null;
   state.drawingBoundarySiteId = null;
   const site = state.sites.find(item => item.id === siteId);
-  closeModal("siloModal");
   setView("map");
   setTimeout(() => map.invalidateSize(), 50);
   if (site) map.setView([site.lat, site.lng], 18, { animate: true });

@@ -997,6 +997,32 @@ def insert_silo(site_id: str, payload: dict) -> dict:
     return {"ok": True, "siloId": silo_id, "capacityM3": capacity, "estimatedTons": tons}
 
 
+def update_silo(silo_id: str, payload: dict) -> dict:
+    with connect() as conn:
+        current = conn.execute("SELECT site_id FROM silos WHERE id = ?", (silo_id,)).fetchone()
+        if not current:
+            raise KeyError("Silo not found")
+    data = {**payload, "id": silo_id}
+    with connect() as conn:
+        silo = conn.execute("SELECT site_id FROM silos WHERE id = ?", (silo_id,)).fetchone()
+        site_id = silo["site_id"]
+        conn.execute("DELETE FROM telemetry WHERE silo_id = ?", (silo_id,))
+        conn.execute("DELETE FROM silos WHERE id = ?", (silo_id,))
+        conn.commit()
+    result = insert_silo(site_id, data)
+    return {"ok": True, "siloId": result["siloId"]}
+
+
+def delete_silo(silo_id: str) -> dict:
+    with connect() as conn:
+        conn.execute("DELETE FROM telemetry WHERE silo_id = ?", (silo_id,))
+        cur = conn.execute("DELETE FROM silos WHERE id = ?", (silo_id,))
+        if cur.rowcount == 0:
+            raise KeyError("Silo not found")
+        conn.commit()
+    return {"ok": True, "siloId": silo_id}
+
+
 def insert_telemetry(silo_id: str, payload: dict) -> dict:
     required = ["grain_humidity", "grain_temperature", "internal_humidity", "internal_temperature", "fill_percent"]
     missing = [key for key in required if key not in payload]
@@ -1083,7 +1109,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def end_headers(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Cache-Control", "no-store")
         super().end_headers()
@@ -1160,6 +1186,9 @@ class Handler(SimpleHTTPRequestHandler):
             if parsed.path.startswith("/api/sites/") and parsed.path.endswith("/boundary"):
                 self.send_json(update_site_boundary(parsed.path.split("/")[3], payload))
                 return
+            if parsed.path.startswith("/api/silos/"):
+                self.send_json(update_silo(parsed.path.split("/")[3], payload))
+                return
             self.send_json({"error": "Not found"}, status=404)
         except KeyError as exc:
             self.send_json({"error": str(exc)}, status=404)
@@ -1167,6 +1196,16 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_json({"error": str(exc)}, status=400)
         except json.JSONDecodeError:
             self.send_json({"error": "Invalid JSON"}, status=400)
+
+    def do_DELETE(self) -> None:
+        parsed = urlparse(self.path)
+        try:
+            if parsed.path.startswith("/api/silos/"):
+                self.send_json(delete_silo(parsed.path.split("/")[3]))
+                return
+            self.send_json({"error": "Not found"}, status=404)
+        except KeyError as exc:
+            self.send_json({"error": str(exc)}, status=404)
 
     def read_json(self) -> dict:
         length = int(self.headers.get("Content-Length", "0"))

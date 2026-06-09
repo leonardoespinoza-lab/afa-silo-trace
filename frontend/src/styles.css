@@ -891,6 +891,26 @@ a.button {
   font-weight: 900;
 }
 
+.site-pin span {
+  position: relative;
+  display: block;
+  width: 28px;
+  height: 28px;
+  border: 3px solid #f4f542;
+  border-radius: 50% 50% 50% 0;
+  background: var(--pin-color);
+  box-shadow: 0 0 0 3px rgba(3, 31, 13, .9), 0 0 18px rgba(57, 255, 136, .45);
+  transform: rotate(-45deg);
+}
+
+.site-pin span::after {
+  content: "";
+  position: absolute;
+  inset: 7px;
+  border-radius: 50%;
+  background: #03200c;
+}
+
 @media (max-width: 1180px) {
   body { overflow: auto; }
   .app-shell {
