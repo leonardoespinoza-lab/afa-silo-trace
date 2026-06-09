@@ -524,6 +524,14 @@ a.button {
   background: rgba(3, 31, 13, .48);
 }
 
+#weatherView {
+  align-content: start;
+}
+
+#weatherView > * {
+  max-width: 1240px;
+}
+
 .app-shell.dashboard #dashboardView,
 .app-shell.weather #weatherView,
 .app-shell.alerts #alertsView,
@@ -539,7 +547,7 @@ a.button {
 }
 
 .dashboard-grid.compact {
-  grid-template-columns: repeat(6, minmax(120px, 1fr));
+  grid-template-columns: repeat(6, minmax(112px, 1fr));
 }
 
 .dashboard-card,
@@ -567,15 +575,16 @@ a.button {
   display: grid;
   grid-template-columns: repeat(2, minmax(280px, 1fr));
   gap: 14px;
-  margin: 18px 0;
+  max-width: 1240px;
+  margin: 14px 0;
 }
 
 .chart-card {
-  min-height: 300px;
+  height: 280px;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  gap: 12px;
-  padding: 16px;
+  gap: 10px;
+  padding: 14px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: linear-gradient(180deg, rgba(6, 73, 30, .76), rgba(2, 35, 14, .92));
@@ -596,7 +605,8 @@ a.button {
 
 .chart-card canvas {
   width: 100% !important;
-  min-height: 220px;
+  height: 205px !important;
+  min-height: 0;
 }
 
 .dashboard-sections,
@@ -1178,6 +1188,12 @@ a.button {
   .detail-grid,
   .storage-top,
   .weather-grid { grid-template-columns: 1fr; }
+  .chart-card {
+    height: 260px;
+  }
+  .chart-card canvas {
+    height: 188px !important;
+  }
   .modal {
     padding: 10px;
     align-items: flex-start;
