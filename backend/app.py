@@ -5,6 +5,8 @@ import math
 import os
 import csv
 import psycopg
+import re
+import unicodedata
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 import threading
@@ -24,6 +26,7 @@ RED_AFA_SEED_PATH = ROOT / "db" / "red_afa_seed.csv"
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8788"))
 WEATHER_REFRESH_MINUTES = int(os.getenv("WEATHER_REFRESH_MINUTES", "15"))
+RED_AFA_SOURCE_FILE = "RED_AFA_coordenadas_maps.xlsx"
 
 GRAINS = {
     "Maiz": {"safe_humidity": 14.1, "density": 0.72},
@@ -110,6 +113,26 @@ def seeded(seed: int):
     return next_value
 
 
+def canonical_lookup(value: str | None) -> str:
+    normalized = "".join(
+        char for char in unicodedata.normalize("NFKD", value or "")
+        if not unicodedata.combining(char)
+    ).lower()
+    normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
+    normalized = re.sub(r"\bj b molina\b", "juan bautista molina", normalized)
+    normalized = re.sub(r"\bjuan b molina\b", "juan bautista molina", normalized)
+    normalized = re.sub(r"\b(de|del|la|las|el|los)\b", " ", normalized)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def canonical_site_key(town: str | None, province: str | None) -> tuple[str, str]:
+    return canonical_lookup(town), canonical_lookup(province)
+
+
+def is_red_afa_source(source_file: str | None) -> bool:
+    return (source_file or "").lower() == RED_AFA_SOURCE_FILE.lower()
+
+
 def classify_silo(grain: str, humidity: float, temp: float, safe_days: int) -> str:
     limit = GRAINS[grain]["safe_humidity"]
     if humidity > limit + 2.8 or temp > 29 or safe_days < 10:
@@ -194,6 +217,165 @@ def seed_dependencies(conn) -> None:
     conn.commit()
 
 
+def choose_site_candidate(candidates: list[dict]) -> dict | None:
+    if not candidates:
+        return None
+    return sorted(
+        candidates,
+        key=lambda row: (
+            int(row.get("silo_count") or 0) > 0 or bool(row.get("boundary_geojson")),
+            is_red_afa_source(row.get("source_file")),
+            int(row.get("silo_count") or 0),
+            bool(row.get("plant_number")),
+            not str(row.get("id", "")).startswith("red-afa-"),
+        ),
+        reverse=True,
+    )[0]
+
+
+def find_red_afa_site(conn, town: str, province: str) -> dict | None:
+    target_key = canonical_site_key(town, province)
+    rows = conn.execute(
+        """
+        SELECT s.id, s.town, s.province, s.source_file, s.plant_number, s.boundary_geojson,
+          (SELECT COUNT(*) FROM silos si WHERE si.site_id = s.id) AS silo_count
+        FROM sites s
+        """
+    ).fetchall()
+    candidates = [
+        dict(row) for row in rows
+        if canonical_site_key(row["town"], row["province"]) == target_key
+    ]
+    return choose_site_candidate(candidates)
+
+
+def apply_red_afa_site_data(conn, site_id: str, row: dict, lat: float | None, lng: float | None) -> None:
+    town = row["loc_sucursal"].strip()
+    province = row["loc_prov"].strip()
+    department = row.get("loc_partido") or None
+    address = row.get("suc_domicilio") or None
+    region = row.get("loc_region") or "RED AFA"
+    phone = row.get("suc_tel") or None
+    email = row.get("suc_correo") or None
+    coord_maps = row.get("coord_maps") or (f"{lat},{lng}" if lat is not None and lng is not None else None)
+    maps_url = row.get("link_maps") or None
+    directions_url = row.get("link_como_llegar") or None
+    conn.execute(
+        """
+        UPDATE sites
+        SET name = ?,
+            province = ?,
+            department = COALESCE(?, department),
+            town = ?,
+            lat = COALESCE(?, lat),
+            lng = COALESCE(?, lng),
+            plant_number = COALESCE(?, plant_number),
+            address = COALESCE(?, address),
+            registry_status = ?,
+            location_source = ?,
+            region = ?,
+            phone = ?,
+            email = ?,
+            coord_maps = ?,
+            maps_url = ?,
+            directions_url = ?,
+            original_lat = ?,
+            original_lng = ?,
+            source_file = ?,
+            updated_at = now()
+        WHERE id = ?
+        """,
+        (
+            f"AFA {town}",
+            province,
+            department,
+            town,
+            lat,
+            lng,
+            row.get("loc_cp") or None,
+            address,
+            RED_AFA_SOURCE_FILE,
+            "Google Maps georreferenciado",
+            region,
+            phone,
+            email,
+            coord_maps,
+            maps_url,
+            directions_url,
+            row.get("suc_lat") or None,
+            row.get("suc_lng") or None,
+            RED_AFA_SOURCE_FILE,
+            site_id,
+        ),
+    )
+
+
+def move_silos_to_site(conn, old_site_id: str, new_site_id: str) -> None:
+    silos = conn.execute("SELECT id, code FROM silos WHERE site_id = ? ORDER BY code", (old_site_id,)).fetchall()
+    for silo in silos:
+        code = silo["code"]
+        candidate = code
+        suffix = 2
+        while conn.execute(
+            "SELECT 1 FROM silos WHERE site_id = ? AND code = ? LIMIT 1",
+            (new_site_id, candidate),
+        ).fetchone():
+            candidate = f"{code}-{suffix}"
+            suffix += 1
+        conn.execute("UPDATE silos SET site_id = ?, code = ? WHERE id = ?", (new_site_id, candidate, silo["id"]))
+
+
+def dedupe_red_afa_sites(conn, rows: list[dict]) -> None:
+    official_by_key = {
+        canonical_site_key(row["loc_sucursal"].strip(), row["loc_prov"].strip()): row
+        for row in rows
+        if row.get("loc_sucursal") and row.get("loc_prov")
+    }
+    sites = conn.execute(
+        """
+        SELECT s.id, s.town, s.province, s.source_file, s.plant_number, s.boundary_geojson,
+          (SELECT COUNT(*) FROM silos si WHERE si.site_id = s.id) AS silo_count
+        FROM sites s
+        """
+    ).fetchall()
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for site in sites:
+        key = canonical_site_key(site["town"], site["province"])
+        if key in official_by_key:
+            groups.setdefault(key, []).append(dict(site))
+    for key, candidates in groups.items():
+        if len(candidates) < 2:
+            continue
+        preferred = choose_site_candidate(candidates)
+        if not preferred:
+            continue
+        preferred_id = preferred["id"]
+        official_row = official_by_key[key]
+        lat = float(official_row["lat_decimal"]) if official_row.get("lat_decimal") else None
+        lng = float(official_row["long_decimal"]) if official_row.get("long_decimal") else None
+        apply_red_afa_site_data(conn, preferred_id, official_row, lat, lng)
+        for duplicate in candidates:
+            duplicate_id = duplicate["id"]
+            if duplicate_id == preferred_id:
+                continue
+            move_silos_to_site(conn, duplicate_id, preferred_id)
+            if not preferred.get("boundary_geojson") and duplicate.get("boundary_geojson"):
+                conn.execute(
+                    "UPDATE sites SET boundary_geojson = COALESCE(boundary_geojson, ?) WHERE id = ?",
+                    (duplicate["boundary_geojson"], preferred_id),
+                )
+            conn.execute("UPDATE dependencies SET parent_site_id = ? WHERE parent_site_id = ?", (preferred_id, duplicate_id))
+            conn.execute("UPDATE users SET site_id = ? WHERE site_id = ?", (preferred_id, duplicate_id))
+            conn.execute(
+                "UPDATE users SET scope_value = ? WHERE scope_type = 'site' AND scope_value = ?",
+                (preferred_id, duplicate_id),
+            )
+            conn.execute("UPDATE audit_log SET site_id = ? WHERE site_id = ?", (preferred_id, duplicate_id))
+            conn.execute("DELETE FROM weather_forecasts WHERE site_id = ?", (duplicate_id,))
+            conn.execute("DELETE FROM weather WHERE site_id = ?", (duplicate_id,))
+            conn.execute("DELETE FROM sites WHERE id = ?", (duplicate_id,))
+
+
 def seed_red_afa(conn) -> None:
     if not RED_AFA_SEED_PATH.exists():
         return
@@ -215,52 +397,11 @@ def seed_red_afa(conn) -> None:
         coord_maps = row.get("coord_maps") or (f"{lat},{lng}" if lat is not None and lng is not None else None)
         maps_url = row.get("link_maps") or None
         directions_url = row.get("link_como_llegar") or None
-        source_file = row.get("source_status") or "RED_AFA_coordenadas_maps.xlsx"
-        existing = conn.execute(
-            "SELECT id FROM sites WHERE lower(town) = lower(?) AND lower(province) = lower(?) LIMIT 1",
-            (town, province),
-        ).fetchone()
+        source_file = row.get("source_status") or RED_AFA_SOURCE_FILE
+        existing = find_red_afa_site(conn, town, province)
         if existing:
             site_id = existing["id"]
-            conn.execute(
-                """
-                UPDATE sites
-                SET lat = COALESCE(?, lat),
-                    lng = COALESCE(?, lng),
-                    department = COALESCE(?, department),
-                    address = COALESCE(?, address),
-                    registry_status = ?,
-                    location_source = ?,
-                    region = ?,
-                    phone = ?,
-                    email = ?,
-                    coord_maps = ?,
-                    maps_url = ?,
-                    directions_url = ?,
-                    original_lat = ?,
-                    original_lng = ?,
-                    source_file = ?
-                WHERE id = ?
-                """,
-                (
-                    lat,
-                    lng,
-                    department,
-                    address,
-                    source_file,
-                    "Google Maps georreferenciado",
-                    region,
-                    phone,
-                    email,
-                    coord_maps,
-                    maps_url,
-                    directions_url,
-                    row.get("suc_lat") or None,
-                    row.get("suc_lng") or None,
-                    source_file,
-                    site_id,
-                ),
-            )
+            apply_red_afa_site_data(conn, site_id, row, lat, lng)
         else:
             site_id = f"red-afa-{slugify(town)}-{slugify(province)}"
             conn.execute(
@@ -282,7 +423,7 @@ def seed_red_afa(conn) -> None:
                     lng,
                     None,
                     row.get("loc_cp") or None,
-                    source_file,
+                    RED_AFA_SOURCE_FILE,
                     address,
                     "Google Maps georreferenciado",
                     region,
@@ -293,7 +434,7 @@ def seed_red_afa(conn) -> None:
                     directions_url,
                     row.get("suc_lat") or None,
                     row.get("suc_lng") or None,
-                    source_file,
+                    RED_AFA_SOURCE_FILE,
                 ),
             )
             has_weather = conn.execute("SELECT 1 FROM weather WHERE site_id = ? LIMIT 1", (site_id,)).fetchone()
@@ -361,6 +502,7 @@ def seed_red_afa(conn) -> None:
                 notes,
             ),
         )
+    dedupe_red_afa_sites(conn, rows)
     conn.commit()
 
 

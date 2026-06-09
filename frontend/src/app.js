@@ -28,14 +28,21 @@ const riskColors = { Normal: "#39ff88", Atencion: "#ffe35a", Riesgo: "#ff9a3d", 
 const grainLimits = { Maiz: 14.1, Trigo: 14.0, Soja: 12.9, Girasol: 8.0, Sorgo: 15.6 };
 const sourceNote = "Sistema con base PostgreSQL. La version productiva deberia importar plantas activas SISA/ARCA, CUIT, numero de planta y estado registral; luego relevar sobre imagen satelital el limite de cada acopio y la circunferencia real de cada silo.";
 
-const map = L.map("map", { zoomControl: false }).setView([-32.9, -61.4], 7);
+const MAP_MAX_ZOOM = 18;
+const map = L.map("map", {
+  zoomControl: false,
+  minZoom: 4,
+  maxZoom: MAP_MAX_ZOOM
+}).setView([-32.9, -61.4], 7);
 L.control.zoom({ position: "bottomright" }).addTo(map);
 const satelliteLayer = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
-  maxZoom: 19,
+  maxZoom: MAP_MAX_ZOOM,
+  maxNativeZoom: MAP_MAX_ZOOM,
   attribution: "Tiles &copy; Esri"
 });
 const streetLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  maxZoom: 19,
+  maxZoom: MAP_MAX_ZOOM,
+  maxNativeZoom: MAP_MAX_ZOOM,
   attribution: "&copy; OpenStreetMap"
 });
 satelliteLayer.addTo(map);
