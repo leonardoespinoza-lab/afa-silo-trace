@@ -9,6 +9,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 import threading
 import time
+from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -696,6 +697,20 @@ def public_user(row: dict) -> dict:
     }
 
 
+def json_safe(value):
+    if isinstance(value, dict):
+        return {key: json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [json_safe(item) for item in value]
+    if isinstance(value, tuple):
+        return [json_safe(item) for item in value]
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    return value
+
+
 def write_audit(
     conn,
     action: str,
@@ -721,8 +736,8 @@ def write_audit(
             entity_type,
             entity_id,
             site_id,
-            Jsonb(before_data) if before_data is not None else None,
-            Jsonb(after_data) if after_data is not None else None,
+            Jsonb(json_safe(before_data)) if before_data is not None else None,
+            Jsonb(json_safe(after_data)) if after_data is not None else None,
         ),
     )
 
@@ -1427,7 +1442,7 @@ class Handler(SimpleHTTPRequestHandler):
         return json.loads(self.rfile.read(length).decode("utf-8") or "{}")
 
     def send_json(self, payload: dict, status: int = 200) -> None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        body = json.dumps(json_safe(payload), ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
