@@ -123,16 +123,17 @@ body::before {
   min-width: 280px;
 }
 
-.brand-mark {
-  width: 44px;
+.brand-logo {
+  width: 76px;
   height: 44px;
-  display: grid;
-  place-items: center;
-  border-radius: 8px;
-  color: #03200c;
-  font-weight: 900;
-  background: linear-gradient(135deg, var(--afa-green-fluor), var(--afa-yellow));
-  box-shadow: 0 0 34px rgba(57, 255, 136, .42);
+  display: block;
+  object-fit: cover;
+  object-position: left center;
+  border-radius: 6px;
+  border: 1px solid rgba(164, 255, 193, .18);
+  background: var(--afa-green-800);
+  box-shadow: 0 0 34px rgba(57, 255, 136, .30);
+  flex: 0 0 auto;
 }
 
 h1,
