@@ -16,7 +16,10 @@ const state = {
   boundaryDraft: [],
   currentUser: null,
   view: "dashboard",
-  users: []
+  users: [],
+  weatherSeries: null,
+  weatherSeriesSiteId: null,
+  weatherSeriesLoading: false
 };
 
 const riskOrder = ["Normal", "Atencion", "Riesgo", "Critico"];
@@ -56,6 +59,7 @@ let activeBoundaryLayer = null;
 let activeSiloLayer = null;
 let activeSiloCenterMarker = null;
 let activeSiloRadiusMarker = null;
+let weatherCharts = [];
 
 async function boot() {
   bindLogin();
@@ -187,6 +191,7 @@ function renderAll() {
   renderDependencyList();
   renderDetail();
   renderDashboard();
+  renderWeatherAnalytics();
   renderAlerts();
   renderUsers();
   populateUserScopeSelect();
@@ -196,7 +201,7 @@ function setView(view) {
   if (view === "users" && state.currentUser?.role !== "admin") return;
   state.view = view;
   const shell = document.getElementById("appShell");
-  shell.classList.remove("dashboard", "map", "sites", "alerts", "users");
+  shell.classList.remove("dashboard", "map", "sites", "weather", "alerts", "users");
   shell.classList.add(view === "sites" ? "map" : view);
   document.querySelectorAll(".nav-button").forEach(button => button.classList.toggle("active", button.dataset.view === view));
   renderAll();
@@ -594,6 +599,155 @@ function renderDashboard() {
 
 function dashboardCard(value, label) {
   return `<div class="dashboard-card"><strong>${value}</strong><span>${label}</span></div>`;
+}
+
+function renderWeatherAnalytics() {
+  const view = document.getElementById("weatherView");
+  if (!view || state.view !== "weather") return;
+  const site = selectedSite();
+  if (!site) {
+    view.innerHTML = `<div class="note">Selecciona un establecimiento para ver clima.</div>`;
+    return;
+  }
+  const shouldLoad = state.weatherSeriesSiteId !== site.id && !state.weatherSeriesLoading;
+  if (shouldLoad) loadWeatherSeries(site.id);
+  const payload = state.weatherSeriesSiteId === site.id ? state.weatherSeries : null;
+  const series = payload?.series || [];
+  const forecast72 = futureRows(series, 72);
+  const rainNext24 = sumRows(futureRows(series, 24), "rain");
+  const maxWind = maxValue(forecast72, "wind");
+  const maxHumidity = maxValue(forecast72, "humidity");
+  const minDewGap = minDewGapValue(forecast72);
+  view.innerHTML = `
+    <div class="section-head">
+      <div>
+        <p class="section-title">Clima externo y pronostico</p>
+        <h2>${site.name}</h2>
+        <div class="site-meta">${site.town}, ${site.province} · fuente ${payload?.source || "Open-Meteo"}</div>
+      </div>
+      <button class="button secondary" id="refreshWeatherSeries">Actualizar</button>
+    </div>
+    <div class="dashboard-grid compact">
+      ${dashboardCard(`${site.weather.externalHumidity || 0}%`, "HR actual")}
+      ${dashboardCard(`${site.weather.externalTemperature || 0}°C`, "temp. actual")}
+      ${dashboardCard(`${rainNext24.toFixed(1)} mm`, "lluvia prox. 24 h")}
+      ${dashboardCard(`${maxWind.toFixed(1)} km/h`, "viento max. 72 h")}
+      ${dashboardCard(`${maxHumidity.toFixed(0)}%`, "HR max. 72 h")}
+      ${dashboardCard(`${minDewGap.toFixed(1)}°C`, "min. brecha temp-rocio")}
+    </div>
+    <div class="weather-analytics-grid">
+      ${chartCard("humidityChart", "Humedad relativa externa", "HR % por hora")}
+      ${chartCard("temperatureChart", "Temperatura y punto de rocio", "Curvas para riesgo de condensacion")}
+      ${chartCard("rainChart", "Lluvia horaria", "mm/h historico reciente y pronostico")}
+      ${chartCard("windChart", "Viento y rafagas", "km/h para evaluar aireacion")}
+    </div>
+    <div class="note">${state.weatherSeriesLoading ? "Cargando serie climatica..." : series.length ? `Serie horaria: ${series.length} puntos · timezone ${payload?.timezone || "auto"}` : "No se pudo cargar la serie climatica."}</div>
+  `;
+  document.getElementById("refreshWeatherSeries").addEventListener("click", () => loadWeatherSeries(site.id, true));
+  if (series.length) requestAnimationFrame(() => drawWeatherCharts(series));
+}
+
+function chartCard(id, title, subtitle) {
+  return `
+    <article class="chart-card">
+      <div>
+        <strong>${title}</strong>
+        <span>${subtitle}</span>
+      </div>
+      <canvas id="${id}" height="150"></canvas>
+    </article>`;
+}
+
+async function loadWeatherSeries(siteId, force = false) {
+  if (!force && state.weatherSeriesSiteId === siteId && state.weatherSeries) return;
+  state.weatherSeriesLoading = true;
+  renderWeatherAnalytics();
+  try {
+    const response = await fetch(`/api/sites/${siteId}/weather-series`);
+    if (!response.ok) throw new Error(await response.text());
+    state.weatherSeries = await response.json();
+    state.weatherSeriesSiteId = siteId;
+  } catch (error) {
+    console.warn(error);
+    state.weatherSeries = null;
+    state.weatherSeriesSiteId = siteId;
+  } finally {
+    state.weatherSeriesLoading = false;
+    renderWeatherAnalytics();
+  }
+}
+
+function drawWeatherCharts(series) {
+  if (!window.Chart) return;
+  const humidityCanvas = document.getElementById("humidityChart");
+  const temperatureCanvas = document.getElementById("temperatureChart");
+  const rainCanvas = document.getElementById("rainChart");
+  const windCanvas = document.getElementById("windChart");
+  if (!humidityCanvas || !temperatureCanvas || !rainCanvas || !windCanvas) return;
+  weatherCharts.forEach(chart => chart.destroy());
+  weatherCharts = [];
+  const labels = series.map(point => formatChartTime(point.time));
+  const axisColor = "rgba(244,255,247,.72)";
+  const gridColor = "rgba(164,255,193,.14)";
+  const baseOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: "index", intersect: false },
+    plugins: { legend: { labels: { color: axisColor, boxWidth: 10 } } },
+    scales: {
+      x: { ticks: { color: axisColor, maxTicksLimit: 8 }, grid: { color: "transparent" } },
+      y: { ticks: { color: axisColor }, grid: { color: gridColor } }
+    }
+  };
+  weatherCharts.push(new Chart(humidityCanvas, lineConfig(labels, [
+    dataset("HR externa %", series.map(p => p.humidity), "#56dcff")
+  ], baseOptions)));
+  weatherCharts.push(new Chart(temperatureCanvas, lineConfig(labels, [
+    dataset("Temp °C", series.map(p => p.temperature), "#f4f542"),
+    dataset("Punto rocio °C", series.map(p => p.dewPoint), "#56dcff")
+  ], baseOptions)));
+  weatherCharts.push(new Chart(rainCanvas, barConfig(labels, [
+    dataset("Lluvia mm", series.map(p => p.rain), "#39ff88")
+  ], baseOptions)));
+  weatherCharts.push(new Chart(windCanvas, lineConfig(labels, [
+    dataset("Viento km/h", series.map(p => p.wind), "#39ff88"),
+    dataset("Rafagas km/h", series.map(p => p.gusts), "#ff9a3d")
+  ], baseOptions)));
+}
+
+function dataset(label, data, color) {
+  return { label, data, borderColor: color, backgroundColor: color, pointRadius: 0, tension: .32, borderWidth: 2 };
+}
+
+function lineConfig(labels, datasets, options) {
+  return { type: "line", data: { labels, datasets }, options };
+}
+
+function barConfig(labels, datasets, options) {
+  return { type: "bar", data: { labels, datasets: datasets.map(item => ({ ...item, borderWidth: 0 })) }, options };
+}
+
+function futureRows(series, hours) {
+  const now = Date.now();
+  return series.filter(point => new Date(point.time).getTime() >= now).slice(0, hours);
+}
+
+function sumRows(series, key) {
+  return series.reduce((sum, point) => sum + Number(point[key] || 0), 0);
+}
+
+function maxValue(series, key) {
+  return Math.max(0, ...series.map(point => Number(point[key] || 0)));
+}
+
+function minDewGapValue(series) {
+  const values = series.map(point => Number(point.temperature) - Number(point.dewPoint)).filter(Number.isFinite);
+  return values.length ? Math.min(...values) : 0;
+}
+
+function formatChartTime(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("es-AR", { weekday: "short", hour: "2-digit" });
 }
 
 function renderAlerts() {

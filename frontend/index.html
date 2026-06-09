@@ -50,6 +50,7 @@
       <nav class="module-nav">
         <button class="nav-button active" data-view="dashboard">Dashboard</button>
         <button class="nav-button" data-view="map">Mapa</button>
+        <button class="nav-button" data-view="weather">Clima</button>
         <button class="nav-button" data-view="sites">Sitios</button>
         <button class="nav-button" data-view="alerts">Alertas</button>
         <button class="nav-button admin-only" data-view="users">Usuarios</button>
@@ -105,6 +106,7 @@
 
     <main class="map-stage">
       <section class="workspace-panel" id="dashboardView"></section>
+      <section class="workspace-panel" id="weatherView"></section>
       <section class="workspace-panel" id="alertsView"></section>
       <section class="workspace-panel" id="usersView">
         <div class="section-head">
@@ -268,6 +270,7 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.min.js"></script>
-  <script src="./src/app.js?v=silo-click-drag-4"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script src="./src/app.js?v=weather-charts-5"></script>
 </body>
 </html>

@@ -91,12 +91,14 @@ body::before {
 }
 
 .app-shell.dashboard .map-stage,
+.app-shell.weather .map-stage,
 .app-shell.alerts .map-stage,
 .app-shell.users .map-stage {
   grid-column: 2 / 4;
 }
 
 .app-shell.dashboard .detail,
+.app-shell.weather .detail,
 .app-shell.alerts .detail,
 .app-shell.users .detail {
   display: none;
@@ -432,6 +434,8 @@ a.button {
 .app-shell.dashboard #map,
 .app-shell.dashboard .legend,
 .app-shell.dashboard .plant-focus,
+.app-shell.weather #map,
+.app-shell.weather .legend,
 .app-shell.alerts #map,
 .app-shell.alerts .legend,
 .app-shell.users #map,
@@ -448,6 +452,7 @@ a.button {
 }
 
 .app-shell.dashboard #dashboardView,
+.app-shell.weather #weatherView,
 .app-shell.alerts #alertsView,
 .app-shell.users #usersView {
   display: block;
@@ -458,6 +463,10 @@ a.button {
   grid-template-columns: repeat(4, minmax(150px, 1fr));
   gap: 12px;
   margin-bottom: 18px;
+}
+
+.dashboard-grid.compact {
+  grid-template-columns: repeat(6, minmax(120px, 1fr));
 }
 
 .dashboard-card,
@@ -479,6 +488,42 @@ a.button {
 .dashboard-card span {
   color: var(--muted);
   font-size: 12px;
+}
+
+.weather-analytics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(280px, 1fr));
+  gap: 14px;
+  margin: 18px 0;
+}
+
+.chart-card {
+  min-height: 300px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(6, 73, 30, .76), rgba(2, 35, 14, .92));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
+}
+
+.chart-card strong {
+  display: block;
+  font-size: 16px;
+}
+
+.chart-card span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 3px;
+}
+
+.chart-card canvas {
+  width: 100% !important;
+  min-height: 220px;
 }
 
 .dashboard-sections,
@@ -1016,6 +1061,7 @@ a.button {
     min-height: 420px;
   }
   .app-shell.dashboard .map-stage,
+  .app-shell.weather .map-stage,
   .app-shell.alerts .map-stage,
   .app-shell.users .map-stage {
     height: auto;
@@ -1046,6 +1092,8 @@ a.button {
     overflow: auto;
   }
   .dashboard-grid,
+  .dashboard-grid.compact,
+  .weather-analytics-grid,
   .plant-summary,
   .site-stats,
   .storage-kpis,

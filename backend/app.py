@@ -8,7 +8,8 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
+from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_DIR = ROOT / "frontend"
@@ -1103,6 +1104,66 @@ def insert_weather(site_id: str, payload: dict) -> dict:
     return {"ok": True, "siteId": site_id, "recordedAt": recorded_at}
 
 
+def open_meteo_series(site_id: str) -> dict:
+    with connect() as conn:
+        site = conn.execute("SELECT id, name, town, province, lat, lng FROM sites WHERE id = ?", (site_id,)).fetchone()
+    if not site:
+        raise KeyError("Site not found")
+    params = urlencode(
+        {
+            "latitude": site["lat"],
+            "longitude": site["lng"],
+            "hourly": ",".join(
+                [
+                    "temperature_2m",
+                    "relative_humidity_2m",
+                    "dew_point_2m",
+                    "precipitation",
+                    "wind_speed_10m",
+                    "wind_gusts_10m",
+                    "pressure_msl",
+                ]
+            ),
+            "past_days": 2,
+            "forecast_days": 3,
+            "timezone": "auto",
+        }
+    )
+    url = f"https://api.open-meteo.com/v1/forecast?{params}"
+    with urlopen(url, timeout=10) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    hourly = payload.get("hourly", {})
+    times = hourly.get("time", [])
+    rows = []
+    for idx, time_value in enumerate(times):
+        rows.append(
+            {
+                "time": time_value,
+                "temperature": hourly.get("temperature_2m", [None] * len(times))[idx],
+                "humidity": hourly.get("relative_humidity_2m", [None] * len(times))[idx],
+                "dewPoint": hourly.get("dew_point_2m", [None] * len(times))[idx],
+                "rain": hourly.get("precipitation", [None] * len(times))[idx],
+                "wind": hourly.get("wind_speed_10m", [None] * len(times))[idx],
+                "gusts": hourly.get("wind_gusts_10m", [None] * len(times))[idx],
+                "pressure": hourly.get("pressure_msl", [None] * len(times))[idx],
+            }
+        )
+    return {
+        "site": {
+            "id": site["id"],
+            "name": site["name"],
+            "town": site["town"],
+            "province": site["province"],
+            "lat": site["lat"],
+            "lng": site["lng"],
+        },
+        "source": "Open-Meteo Forecast API",
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "timezone": payload.get("timezone"),
+        "series": rows,
+    }
+
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(FRONTEND_DIR), **kwargs)
@@ -1131,6 +1192,14 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/users":
             self.send_json({"users": list_users()})
+            return
+        if parsed.path.startswith("/api/sites/") and parsed.path.endswith("/weather-series"):
+            try:
+                self.send_json(open_meteo_series(parsed.path.split("/")[3]))
+            except KeyError as exc:
+                self.send_json({"error": str(exc)}, status=404)
+            except Exception as exc:
+                self.send_json({"error": "Weather provider unavailable", "detail": str(exc)}, status=502)
             return
         if parsed.path.startswith("/api/silos/") and parsed.path.endswith("/telemetry"):
             silo_id = parsed.path.split("/")[3]
