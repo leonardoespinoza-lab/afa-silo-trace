@@ -37,6 +37,13 @@ const streetLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.
 });
 satelliteLayer.addTo(map);
 L.control.layers({ "Satelital": satelliteLayer, "Calles": streetLayer }, {}, { position: "bottomright" }).addTo(map);
+map.createPane("boundaryPane");
+map.getPane("boundaryPane").style.zIndex = 350;
+map.getPane("boundaryPane").style.pointerEvents = "none";
+map.createPane("siloPane");
+map.getPane("siloPane").style.zIndex = 430;
+map.createPane("sitePane");
+map.getPane("sitePane").style.zIndex = 460;
 
 const siteLayer = L.layerGroup().addTo(map);
 const plantLayer = L.layerGroup().addTo(map);
@@ -330,7 +337,7 @@ function renderMap() {
   const bounds = [];
   sites.forEach(site => {
     const agg = aggregate(site);
-    const siteMarker = L.marker([site.lat, site.lng], { icon: sitePinIcon(agg.worst) }).addTo(siteLayer);
+    const siteMarker = L.marker([site.lat, site.lng], { icon: sitePinIcon(agg.worst), pane: "sitePane" }).addTo(siteLayer);
     siteMarker.bindPopup(`<div class="popup-title">${site.name}</div><div>${site.town}, ${site.province}</div><div>${agg.silos.length} silos · ${agg.tons.toLocaleString("es-AR")} t</div><div>Clima: ${site.weather.externalHumidity}% HR ext.</div>`);
     siteMarker.bindTooltip(site.name, { direction: "top", offset: [0, -12], opacity: .92 });
     siteMarker.on("click", () => selectSite(site.id));
@@ -351,6 +358,8 @@ function renderMap() {
       : site.boundary?.length ? site.boundary.map(point => [point.lat, point.lng]) : null;
     if (boundary && state.drawingBoundarySiteId !== site.id && (state.selectedSiteId === site.id || map.getZoom() >= 12)) {
       L.polygon(boundary, {
+        pane: "boundaryPane",
+        interactive: false,
         color: "#39ff88",
         weight: 2,
         opacity: .95,
@@ -364,6 +373,7 @@ function renderMap() {
         const silo = item.silo;
         const marker = L.circle([item.lat, item.lng], {
         radius: Math.max(5, Number(silo.diameter || 18) / 2),
+        pane: "siloPane",
         color: "#f4fff7",
         weight: 2,
         fillColor: riskColors[silo.status],
@@ -403,10 +413,9 @@ function renderMap() {
 }
 
 function sitePinIcon(status) {
-  const color = riskColors[status] || riskColors.Normal;
   return L.divIcon({
     className: "site-pin",
-    html: `<span style="--pin-color:${color}"></span>`,
+    html: `<span></span>`,
     iconSize: [30, 38],
     iconAnchor: [15, 36],
     popupAnchor: [0, -32]
@@ -708,6 +717,7 @@ function renderDetail() {
         <button class="button secondary" id="editSite">Editar ficha</button>
         <button class="button secondary" id="drawBoundary">${state.drawingBoundarySiteId === site.id ? "Guardar limite" : "Dibujar establecimiento"}</button>
         ${state.drawingBoundarySiteId === site.id ? `<button class="button secondary" id="undoBoundary">Deshacer punto</button><button class="button secondary" id="cancelBoundary">Cancelar limite</button>` : ""}
+        ${state.drawingSiloSiteId === site.id ? `<button class="button" id="finishSiloDrawing">Usar circulo y volver</button><button class="button secondary" id="cancelSiloDrawing">Cancelar silo</button>` : ""}
       </div>
       <div class="note">${mapModeHelp(site) || "Sitio cargado desde la base oficial AFA. Falta relevar silos fisicos: centro del silo, diametro, altura, grano, humedad y sensores internos."}</div>
       <div class="detail-grid">
@@ -725,6 +735,8 @@ function renderDetail() {
     document.getElementById("drawBoundary").addEventListener("click", () => toggleBoundary(site));
     document.getElementById("undoBoundary")?.addEventListener("click", () => undoBoundaryPoint(site));
     document.getElementById("cancelBoundary")?.addEventListener("click", () => cancelBoundary(site));
+    document.getElementById("finishSiloDrawing")?.addEventListener("click", finishSiloDrawing);
+    document.getElementById("cancelSiloDrawing")?.addEventListener("click", cancelSiloDrawing);
     return;
   }
   document.getElementById("detail").innerHTML = `
@@ -755,6 +767,7 @@ function renderDetail() {
       <button class="button secondary" id="editSite">Editar ficha</button>
       <button class="button secondary" id="drawBoundary">${state.drawingBoundarySiteId === site.id ? "Guardar limite" : "Dibujar establecimiento"}</button>
       ${state.drawingBoundarySiteId === site.id ? `<button class="button secondary" id="undoBoundary">Deshacer punto</button><button class="button secondary" id="cancelBoundary">Cancelar limite</button>` : ""}
+      ${state.drawingSiloSiteId === site.id ? `<button class="button" id="finishSiloDrawing">Usar circulo y volver</button><button class="button secondary" id="cancelSiloDrawing">Cancelar silo</button>` : ""}
     </div>
     <div class="silo-layout-note">${mapModeHelp(site) || locationHelp(site)}</div>
     <div class="silo-list">
@@ -800,6 +813,8 @@ function renderDetail() {
   document.getElementById("drawBoundary").addEventListener("click", () => toggleBoundary(site));
   document.getElementById("undoBoundary")?.addEventListener("click", () => undoBoundaryPoint(site));
   document.getElementById("cancelBoundary")?.addEventListener("click", () => cancelBoundary(site));
+  document.getElementById("finishSiloDrawing")?.addEventListener("click", finishSiloDrawing);
+  document.getElementById("cancelSiloDrawing")?.addEventListener("click", cancelSiloDrawing);
   document.getElementById("editSilo").addEventListener("click", () => openSiloForm(site, null, silo));
   document.getElementById("deleteSilo").addEventListener("click", () => deleteSelectedSilo(site, silo));
   document.getElementById("toggleMotor").addEventListener("click", () => {
@@ -980,6 +995,16 @@ function closeModal(id) {
     state.drawingSiloSiteId = null;
     map.pm?.disableDraw();
   }
+  if (id === "siloModal") {
+    if (activeSiloLayer) {
+      activeSiloLayer.remove();
+      activeSiloLayer = null;
+    }
+    if (pendingSiloCircle) {
+      pendingSiloCircle.remove();
+      pendingSiloCircle = null;
+    }
+  }
 }
 
 function selectedSite() {
@@ -988,6 +1013,10 @@ function selectedSite() {
 
 function openSiloForm(site, point = null, silo = null) {
   const form = document.getElementById("siloForm");
+  if (activeSiloLayer) {
+    activeSiloLayer.remove();
+    activeSiloLayer = null;
+  }
   form.reset();
   form.dataset.siteId = site.id;
   form.dataset.siloId = silo?.id || "";
@@ -1095,6 +1124,10 @@ async function submitSilo(event) {
     activeSiloLayer.remove();
     activeSiloLayer = null;
   }
+  if (pendingSiloCircle) {
+    pendingSiloCircle.remove();
+    pendingSiloCircle = null;
+  }
   state.drawingSiloSiteId = null;
   delete form.dataset.siloId;
   await refreshData(siteId, result.siloId || siloId);
@@ -1169,21 +1202,49 @@ function beginSiloMapPick() {
   const site = state.sites.find(item => item.id === siteId);
   setView("map");
   setTimeout(() => map.invalidateSize(), 50);
-  if (site) map.setView([site.lat, site.lng], 18, { animate: true });
+  const lat = Number(form.elements.lat.value || site?.lat);
+  const lng = Number(form.elements.lng.value || site?.lng);
+  const diameter = Number(form.elements.diameter_m.value || 18);
+  if (site) map.setView([lat || site.lat, lng || site.lng], 18, { animate: true });
   if (activeSiloLayer) {
     activeSiloLayer.remove();
     activeSiloLayer = null;
   }
   map.pm.disableDraw();
-  map.pm.enableDraw("Circle", {
-    snappable: false,
-    pathOptions: {
-      color: "#f4f542",
-      fillColor: "#39ff88",
-      fillOpacity: 0.28
-    }
-  });
+  activeSiloLayer = L.circle([lat, lng], {
+    radius: Math.max(3, diameter / 2),
+    color: "#f4f542",
+    weight: 2,
+    fillColor: "#39ff88",
+    fillOpacity: .28,
+    pane: "siloPane"
+  }).addTo(map);
+  activeSiloLayer.pm.enable({ draggable: true, snappable: false });
+  activeSiloLayer.on("pm:edit", syncSiloModalFromLayer);
+  activeSiloLayer.on("pm:dragend", syncSiloModalFromLayer);
+  syncSiloModalFromLayer();
   renderDetail();
+}
+
+function finishSiloDrawing() {
+  if (!activeSiloLayer) {
+    alert("Primero ubica el circulo del silo en el mapa.");
+    return;
+  }
+  syncSiloModalFromLayer();
+  state.drawingSiloSiteId = null;
+  openModal("siloModal");
+  renderDetail();
+}
+
+function cancelSiloDrawing() {
+  state.drawingSiloSiteId = null;
+  map.pm.disableDraw();
+  if (activeSiloLayer) {
+    activeSiloLayer.remove();
+    activeSiloLayer = null;
+  }
+  renderAll();
 }
 
 async function toggleBoundary(site) {
@@ -1413,9 +1474,11 @@ function drawPendingSiloCircle() {
     pendingSiloCircle.remove();
     pendingSiloCircle = null;
   }
+  if (activeSiloLayer) return;
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || !diameter) return;
   pendingSiloCircle = L.circle([lat, lng], {
     radius: Math.max(3, diameter / 2),
+    pane: "siloPane",
     color: "#f4f542",
     weight: 2,
     fillColor: "#39ff88",

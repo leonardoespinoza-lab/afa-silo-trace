@@ -896,10 +896,10 @@ a.button {
   display: block;
   width: 28px;
   height: 28px;
-  border: 3px solid #f4f542;
+  border: 3px solid #fff7f5;
   border-radius: 50% 50% 50% 0;
-  background: var(--pin-color);
-  box-shadow: 0 0 0 3px rgba(3, 31, 13, .9), 0 0 18px rgba(57, 255, 136, .45);
+  background: #ff3b30;
+  box-shadow: 0 0 0 3px rgba(3, 31, 13, .9), 0 8px 18px rgba(255, 59, 48, .42);
   transform: rotate(-45deg);
 }
 
@@ -908,7 +908,7 @@ a.button {
   position: absolute;
   inset: 7px;
   border-radius: 50%;
-  background: #03200c;
+  background: #fff7f5;
 }
 
 @media (max-width: 1180px) {
