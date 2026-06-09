@@ -55,14 +55,10 @@
         <button class="nav-button" data-view="alerts">Alertas</button>
         <button class="nav-button admin-only" data-view="users">Usuarios</button>
       </nav>
+      <section class="sidebar-summary" id="sidebarSummary"></section>
       <section class="selector-panel">
-        <p class="section-title">Seleccion principal</p>
-        <button class="button full admin-only" id="openSiteForm">Agregar acopio</button>
-        <button class="button secondary full admin-only" id="openDependencyForm">Agregar dependencia</button>
+        <p class="section-title">Seleccion y filtros</p>
         <div class="filters">
-          <label>Provincia
-            <select id="provinceFilter"></select>
-          </label>
           <label>CCP / establecimiento
             <select id="siteSelect"></select>
           </label>
@@ -70,11 +66,18 @@
             <input id="searchFilter" type="search" placeholder="Ej. Maciel, Metan, S-ARR-01" />
           </label>
         </div>
+        <div class="quick-actions admin-only">
+          <button class="button full" id="openSiteForm">Agregar acopio</button>
+          <button class="button secondary full" id="openDependencyForm">Agregar dependencia</button>
+        </div>
       </section>
 
-      <details class="menu-block" open>
+      <details class="menu-block">
         <summary>Filtros avanzados</summary>
         <div class="filters">
+          <label>Provincia
+            <select id="provinceFilter"></select>
+          </label>
           <label>Tipo de sitio
             <select id="siteTypeFilter"></select>
           </label>
@@ -271,6 +274,6 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-  <script src="./src/app.js?v=weather-charts-5"></script>
+  <script src="./src/app.js?v=layout-ops-sidebar-6"></script>
 </body>
 </html>

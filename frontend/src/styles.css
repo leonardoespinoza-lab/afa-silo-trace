@@ -86,7 +86,7 @@ body::before {
   z-index: 1;
   height: 100vh;
   display: grid;
-  grid-template-columns: 370px minmax(540px, 1fr) 450px;
+  grid-template-columns: 270px minmax(0, 1fr) 430px;
   grid-template-rows: 76px 1fr;
 }
 
@@ -120,7 +120,7 @@ body::before {
   display: flex;
   align-items: center;
   gap: 14px;
-  min-width: 310px;
+  min-width: 280px;
 }
 
 .brand-mark {
@@ -155,7 +155,7 @@ p { margin: 0; }
   display: grid;
   grid-template-columns: repeat(5, minmax(110px, 1fr));
   gap: 10px;
-  width: min(760px, 54vw);
+  width: min(720px, 50vw);
 }
 
 .top-actions {
@@ -209,24 +209,26 @@ label {
 
 .sidebar {
   border-right: 1px solid var(--line);
-  padding: 18px;
+  padding: 12px;
 }
 
 .module-nav {
   display: grid;
-  gap: 8px;
-  margin-bottom: 18px;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  margin-bottom: 12px;
 }
 
 .nav-button {
-  min-height: 40px;
+  min-height: 34px;
   border: 1px solid var(--line);
   border-radius: 8px;
   color: var(--ink);
   background: rgba(2, 27, 11, .58);
+  font-size: 12px;
   font-weight: 850;
-  text-align: left;
-  padding: 0 12px;
+  text-align: center;
+  padding: 0 8px;
   cursor: pointer;
 }
 
@@ -252,17 +254,88 @@ label {
 
 .filters {
   display: grid;
-  gap: 11px;
-  margin: 12px 0 18px;
+  gap: 8px;
+  margin: 9px 0 12px;
 }
 
 .selector-panel {
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--line);
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(2, 35, 14, .46);
+  margin-bottom: 10px;
+}
+
+.quick-actions {
+  display: grid;
+  gap: 7px;
+}
+
+.sidebar-summary {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  margin-bottom: 10px;
+  border: 1px solid rgba(164, 255, 193, .28);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(6, 73, 30, .78), rgba(2, 35, 14, .94));
+}
+
+.sidebar-summary h3 {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.15;
+}
+
+.sidebar-summary .summary-meta {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.sidebar-summary-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+}
+
+.summary-mini {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(3, 31, 13, .62);
+}
+
+.summary-mini strong {
+  display: block;
+  color: var(--afa-yellow);
+  font-size: 16px;
+  line-height: 1.05;
+}
+
+.summary-mini span {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.25;
+}
+
+.sidebar-summary .summary-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+}
+
+.sidebar-summary .summary-actions .button {
+  min-height: 32px;
+  padding: 0 8px;
+  font-size: 11px;
 }
 
 .menu-block {
-  margin-top: 12px;
+  margin-top: 9px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(2, 27, 11, .42);
@@ -271,7 +344,7 @@ label {
 
 .menu-block summary {
   cursor: pointer;
-  padding: 12px;
+  padding: 10px;
   color: var(--afa-green-fluor);
   font-size: 12px;
   font-weight: 900;
@@ -297,7 +370,7 @@ label {
 .menu-block .filters,
 .menu-block .site-list,
 .menu-block .dependency-list {
-  padding: 0 12px 12px;
+  padding: 0 10px 10px;
 }
 
 label {
@@ -308,10 +381,10 @@ label {
 select,
 input {
   width: 100%;
-  min-height: 38px;
+  min-height: 34px;
   border: 1px solid var(--line);
   border-radius: 7px;
-  padding: 8px 10px;
+  padding: 7px 9px;
   outline: none;
   color: var(--ink);
   background: rgba(2, 27, 11, .78);
@@ -328,17 +401,17 @@ input:focus {
 .silo-list,
 .timeline {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .site-card {
-  padding: 12px;
+  padding: 10px;
   cursor: pointer;
   transition: transform .14s ease, border-color .14s ease, background .14s ease;
 }
 
 .dependency-card {
-  padding: 12px;
+  padding: 10px;
   background:
     linear-gradient(135deg, rgba(86, 220, 255, .08), transparent 38%),
     linear-gradient(180deg, rgba(6, 73, 30, .70), rgba(2, 35, 14, .86));
@@ -979,7 +1052,7 @@ a.button {
   .app-shell {
     height: auto;
     min-height: 100vh;
-    grid-template-columns: 340px 1fr;
+    grid-template-columns: 270px 1fr;
     grid-template-rows: auto 640px auto;
   }
   .topbar {

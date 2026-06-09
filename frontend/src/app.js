@@ -186,6 +186,7 @@ function bindControls() {
 function renderAll() {
   updateFilters();
   renderMetrics();
+  renderSidebarSummary();
   renderMap();
   renderSiteList();
   renderDependencyList();
@@ -334,6 +335,42 @@ function renderMetrics() {
     [`${volume.toLocaleString("es-AR")} m³`, "volumen grano"],
     [`${extHumidity}%`, "humedad externa"]
   ].map(([value, label]) => `<div class="metric"><strong>${value}</strong><span>${label}</span></div>`).join("");
+}
+
+function renderSidebarSummary() {
+  const container = document.getElementById("sidebarSummary");
+  if (!container) return;
+  const site = selectedSite();
+  if (!site) {
+    container.innerHTML = `<div class="summary-meta">Selecciona un establecimiento para ver resumen operativo.</div>`;
+    return;
+  }
+  const agg = aggregate(site);
+  const totalCapacity = site.silos.reduce((sum, silo) => sum + Number(silo.capacity || 0), 0);
+  const totalVolume = site.silos.reduce((sum, silo) => sum + Number(silo.volume || 0), 0);
+  const fillPct = totalCapacity ? Math.round((totalVolume / totalCapacity) * 100) : 0;
+  container.innerHTML = `
+    <div>
+      <p class="section-title">Sitio activo</p>
+      <h3>${site.name}</h3>
+      <div class="summary-meta">${site.town}, ${site.province}<br>${site.locationSource || "Coordenada AFA"} · ${site.plantNumber ? `Planta ${site.plantNumber}` : "planta s/d"}</div>
+    </div>
+    <div class="sidebar-summary-grid">
+      ${summaryMini(agg.silos.length, "silos")}
+      ${summaryMini(`${totalCapacity.toLocaleString("es-AR")} m³`, "capacidad")}
+      ${summaryMini(`${agg.tons.toLocaleString("es-AR")} t`, "stock")}
+      ${summaryMini(`${fillPct}%`, "ocupacion")}
+      ${summaryMini(`${site.weather.externalHumidity || 0}%`, "HR externa")}
+      ${summaryMini(agg.alerts, "alertas")}
+    </div>
+    <div class="summary-actions">
+      <button class="button secondary" type="button" onclick="setModuleView('map')">Ver mapa</button>
+      <button class="button secondary" type="button" onclick="setModuleView('weather')">Ver clima</button>
+    </div>`;
+}
+
+function summaryMini(value, label) {
+  return `<div class="summary-mini"><strong>${value}</strong><span>${label}</span></div>`;
 }
 
 function renderMap() {
