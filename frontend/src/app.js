@@ -45,6 +45,8 @@ let pendingLocationMarker = null;
 let pendingLocation = null;
 let pendingSiloCircle = null;
 let liveWeatherSiteId = null;
+let activeBoundaryLayer = null;
+let activeSiloLayer = null;
 
 async function boot() {
   bindLogin();
@@ -165,6 +167,7 @@ function bindControls() {
   document.getElementById("closeReport").addEventListener("click", closeReport);
   document.getElementById("printReport").addEventListener("click", () => window.print());
   map.on("click", handleMapClick);
+  map.on("pm:create", handleGeomanCreate);
 }
 
 function renderAll() {
@@ -352,7 +355,7 @@ function renderMap() {
     const boundary = state.drawingBoundarySiteId === site.id && state.boundaryDraft.length
       ? state.boundaryDraft.map(point => [point.lat, point.lng])
       : site.boundary?.length ? site.boundary.map(point => [point.lat, point.lng]) : null;
-    if (boundary && (state.selectedSiteId === site.id || map.getZoom() >= 12)) {
+    if (boundary && state.drawingBoundarySiteId !== site.id && (state.selectedSiteId === site.id || map.getZoom() >= 12)) {
       L.polygon(boundary, {
         color: "#39ff88",
         weight: 2,
@@ -860,10 +863,10 @@ function locationHelp(site) {
 
 function mapModeHelp(site) {
   if (state.drawingSiloSiteId === site.id) {
-    return "Modo ubicacion de silo activo: hace click sobre el centro real del silo. Volveras al cuadro Crear silo con la coordenada cargada.";
+    return "Modo silo activo: dibuja un circulo en el mapa. Despues podes moverlo o estirar el radio; el modal toma centro y diametro.";
   }
   if (state.drawingBoundarySiteId === site.id) {
-    return `Modo establecimiento activo: hace click en los vertices. Puntos: ${state.boundaryDraft.length}. Puedes deshacer, cancelar o guardar.`;
+    return "Modo establecimiento activo: dibuja o edita el poligono con sus manijas. Mueve vertices libremente y luego guarda.";
   }
   return "";
 }
@@ -962,6 +965,10 @@ function openModal(id) {
 function closeModal(id) {
   document.getElementById(id).classList.remove("open");
   document.getElementById(id).setAttribute("aria-hidden", "true");
+  if (id === "siloModal" && state.drawingSiloSiteId) {
+    state.drawingSiloSiteId = null;
+    map.pm?.disableDraw();
+  }
 }
 
 function selectedSite() {
@@ -1065,6 +1072,11 @@ async function submitSilo(event) {
   if (!response.ok) throw new Error(await response.text());
   const result = await response.json();
   closeModal("siloModal");
+  if (activeSiloLayer) {
+    activeSiloLayer.remove();
+    activeSiloLayer = null;
+  }
+  state.drawingSiloSiteId = null;
   await refreshData(siteId, result.siloId);
 }
 
@@ -1128,67 +1140,148 @@ function beginSiloMapPick() {
   state.drawingBoundarySiteId = null;
   const site = state.sites.find(item => item.id === siteId);
   closeModal("siloModal");
+  setView("map");
+  setTimeout(() => map.invalidateSize(), 50);
   if (site) map.setView([site.lat, site.lng], 18, { animate: true });
+  if (activeSiloLayer) {
+    activeSiloLayer.remove();
+    activeSiloLayer = null;
+  }
+  map.pm.disableDraw();
+  map.pm.enableDraw("Circle", {
+    snappable: false,
+    pathOptions: {
+      color: "#f4f542",
+      fillColor: "#39ff88",
+      fillOpacity: 0.28
+    }
+  });
   renderDetail();
 }
 
 async function toggleBoundary(site) {
   if (state.drawingBoundarySiteId === site.id) {
-    if (state.boundaryDraft.length < 3) {
-      alert("Marca al menos 3 puntos para cerrar el limite.");
+    const points = boundaryPointsFromLayer();
+    if (points.length < 3) {
+      alert("Dibuja al menos 3 puntos para cerrar el establecimiento.");
       return;
     }
     const response = await fetch(`/api/sites/${site.id}/boundary`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ boundary: state.boundaryDraft })
+      body: JSON.stringify({ boundary: points })
     });
     if (!response.ok) throw new Error(await response.text());
     state.drawingBoundarySiteId = null;
     state.boundaryDraft = [];
+    if (activeBoundaryLayer) {
+      activeBoundaryLayer.remove();
+      activeBoundaryLayer = null;
+    }
     await refreshData(site.id, state.selectedSiloId);
     return;
   }
   state.drawingBoundarySiteId = site.id;
-  state.boundaryDraft = site.boundary ? [...site.boundary] : [];
+  state.boundaryDraft = [];
   state.locatingSiteId = null;
   state.drawingSiloSiteId = null;
+  setView("map");
+  setTimeout(() => map.invalidateSize(), 50);
   map.setView([site.lat, site.lng], 18, { animate: true });
-  renderAll();
+  if (activeBoundaryLayer) {
+    activeBoundaryLayer.remove();
+    activeBoundaryLayer = null;
+  }
+  if (site.boundary?.length) {
+    activeBoundaryLayer = L.polygon(site.boundary.map(point => [point.lat, point.lng]), {
+      color: "#39ff88",
+      weight: 2,
+      fillColor: "#39ff88",
+      fillOpacity: .10
+    }).addTo(map);
+    activeBoundaryLayer.pm.enable({ allowSelfIntersection: false });
+  } else {
+    map.pm.disableDraw();
+    map.pm.enableDraw("Polygon", {
+      snappable: false,
+      allowSelfIntersection: false,
+      pathOptions: {
+        color: "#39ff88",
+        fillColor: "#39ff88",
+        fillOpacity: 0.10
+      }
+    });
+  }
+  renderDetail();
 }
 
 function undoBoundaryPoint(site) {
   if (state.drawingBoundarySiteId !== site.id) return;
-  state.boundaryDraft.pop();
-  renderAll();
+  if (!activeBoundaryLayer) {
+    alert("Todavia no hay poligono editable. Termina de marcar el establecimiento o cancela.");
+    return;
+  }
+  const points = boundaryPointsFromLayer();
+  points.pop();
+  activeBoundaryLayer.setLatLngs([points.map(point => [point.lat, point.lng])]);
+  activeBoundaryLayer.pm.enable({ allowSelfIntersection: false });
+  renderDetail();
 }
 
 function cancelBoundary(site) {
   if (state.drawingBoundarySiteId !== site.id) return;
   state.drawingBoundarySiteId = null;
   state.boundaryDraft = [];
+  map.pm.disableDraw();
+  if (activeBoundaryLayer) {
+    activeBoundaryLayer.remove();
+    activeBoundaryLayer = null;
+  }
   renderAll();
 }
 
-async function handleMapClick(event) {
-  if (state.drawingSiloSiteId) {
-    const site = state.sites.find(item => item.id === state.drawingSiloSiteId);
-    if (!site) return;
-    state.drawingSiloSiteId = null;
+function boundaryPointsFromLayer() {
+  if (!activeBoundaryLayer) return [];
+  const latLngs = activeBoundaryLayer.getLatLngs()[0] || [];
+  return latLngs.map(point => ({ lat: point.lat, lng: point.lng }));
+}
+
+function handleGeomanCreate(event) {
+  if (state.drawingSiloSiteId && event.shape === "Circle") {
+    map.pm.disableDraw();
+    if (activeSiloLayer && activeSiloLayer !== event.layer) activeSiloLayer.remove();
+    activeSiloLayer = event.layer;
+    activeSiloLayer.pm.enable({ allowSelfIntersection: false });
+    activeSiloLayer.on("pm:edit", syncSiloModalFromLayer);
+    activeSiloLayer.on("pm:dragend", syncSiloModalFromLayer);
+    syncSiloModalFromLayer();
     const form = document.getElementById("siloForm");
-    form.elements.lat.value = event.latlng.lat.toFixed(6);
-    form.elements.lng.value = event.latlng.lng.toFixed(6);
-    updateSiloCalculation();
-    drawPendingSiloCircle();
     openModal("siloModal");
+    document.getElementById("siloCalc").innerHTML += `<br><strong>Circulo editable:</strong> podes moverlo o estirar el radio en el mapa antes de crear.`;
+    return;
+  }
+  if (state.drawingBoundarySiteId && event.shape === "Polygon") {
+    map.pm.disableDraw();
+    if (activeBoundaryLayer && activeBoundaryLayer !== event.layer) activeBoundaryLayer.remove();
+    activeBoundaryLayer = event.layer;
+    activeBoundaryLayer.pm.enable({ allowSelfIntersection: false });
     renderDetail();
-    return;
   }
-  if (state.drawingBoundarySiteId) {
-    state.boundaryDraft.push({ lat: event.latlng.lat, lng: event.latlng.lng });
-    renderAll();
-    return;
-  }
+}
+
+function syncSiloModalFromLayer() {
+  if (!activeSiloLayer) return;
+  const form = document.getElementById("siloForm");
+  const center = activeSiloLayer.getLatLng();
+  const diameter = activeSiloLayer.getRadius() * 2;
+  form.elements.lat.value = center.lat.toFixed(6);
+  form.elements.lng.value = center.lng.toFixed(6);
+  form.elements.diameter_m.value = Math.max(1, diameter).toFixed(1);
+  updateSiloCalculation();
+}
+
+async function handleMapClick(event) {
+  if (state.drawingSiloSiteId || state.drawingBoundarySiteId) return;
   if (!state.locatingSiteId) return;
   const { lat, lng } = event.latlng;
   setPendingLocation(lat, lng);
