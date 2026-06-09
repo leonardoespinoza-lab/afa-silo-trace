@@ -54,6 +54,8 @@ let pendingSiloCircle = null;
 let liveWeatherSiteId = null;
 let activeBoundaryLayer = null;
 let activeSiloLayer = null;
+let activeSiloCenterMarker = null;
+let activeSiloRadiusMarker = null;
 
 async function boot() {
   bindLogin();
@@ -419,6 +421,15 @@ function sitePinIcon(status) {
     iconSize: [30, 38],
     iconAnchor: [15, 36],
     popupAnchor: [0, -32]
+  });
+}
+
+function siloEditHandleIcon(type) {
+  return L.divIcon({
+    className: `silo-edit-handle ${type}`,
+    html: `<span></span>`,
+    iconSize: [22, 22],
+    iconAnchor: [11, 11]
   });
 }
 
@@ -908,7 +919,7 @@ function locationHelp(site) {
 
 function mapModeHelp(site) {
   if (state.drawingSiloSiteId === site.id) {
-    return "Modo silo activo: dibuja un circulo en el mapa. Despues podes moverlo o estirar el radio; el modal toma centro y diametro.";
+    return "Modo silo activo: hace click exactamente sobre el silo real. Luego arrastra el punto central para moverlo o el punto del borde para ajustar diametro.";
   }
   if (state.drawingBoundarySiteId === site.id) {
     return "Modo establecimiento activo: dibuja o edita el poligono con sus manijas. Mueve vertices libremente y luego guarda.";
@@ -1015,10 +1026,7 @@ function closeModal(id) {
     map.pm?.disableDraw();
   }
   if (id === "siloModal") {
-    if (activeSiloLayer) {
-      activeSiloLayer.remove();
-      activeSiloLayer = null;
-    }
+    cleanupSiloEditor();
     if (pendingSiloCircle) {
       pendingSiloCircle.remove();
       pendingSiloCircle = null;
@@ -1032,10 +1040,7 @@ function selectedSite() {
 
 function openSiloForm(site, point = null, silo = null) {
   const form = document.getElementById("siloForm");
-  if (activeSiloLayer) {
-    activeSiloLayer.remove();
-    activeSiloLayer = null;
-  }
+  cleanupSiloEditor();
   const suggestedPoint = point || (silo ? null : suggestedSiloPoint(site));
   form.reset();
   form.dataset.siteId = site.id;
@@ -1140,10 +1145,7 @@ async function submitSilo(event) {
   if (!response.ok) throw new Error(await response.text());
   const result = await response.json();
   closeModal("siloModal");
-  if (activeSiloLayer) {
-    activeSiloLayer.remove();
-    activeSiloLayer = null;
-  }
+  cleanupSiloEditor();
   if (pendingSiloCircle) {
     pendingSiloCircle.remove();
     pendingSiloCircle = null;
@@ -1215,6 +1217,10 @@ async function savePendingLocation(site) {
 function beginSiloMapPick() {
   const form = document.getElementById("siloForm");
   const siteId = form.dataset.siteId || state.selectedSiteId;
+  const isEditing = Boolean(form.dataset.siloId);
+  const lat = Number(form.elements.lat.value);
+  const lng = Number(form.elements.lng.value);
+  const diameter = Number(form.elements.diameter_m.value || 18);
   closeModal("siloModal");
   state.drawingSiloSiteId = siteId;
   state.locatingSiteId = null;
@@ -1222,27 +1228,14 @@ function beginSiloMapPick() {
   const site = state.sites.find(item => item.id === siteId);
   setView("map");
   setTimeout(() => map.invalidateSize(), 50);
-  const lat = Number(form.elements.lat.value || site?.lat);
-  const lng = Number(form.elements.lng.value || site?.lng);
-  const diameter = Number(form.elements.diameter_m.value || 18);
-  if (site) map.setView([lat || site.lat, lng || site.lng], 18, { animate: true });
-  if (activeSiloLayer) {
-    activeSiloLayer.remove();
-    activeSiloLayer = null;
-  }
+  const targetLat = isEditing && Number.isFinite(lat) ? lat : site?.lat;
+  const targetLng = isEditing && Number.isFinite(lng) ? lng : site?.lng;
+  if (site) map.setView([targetLat || site.lat, targetLng || site.lng], 19, { animate: true });
+  cleanupSiloEditor();
   map.pm.disableDraw();
-  activeSiloLayer = L.circle([lat, lng], {
-    radius: Math.max(3, diameter / 2),
-    color: "#f4f542",
-    weight: 2,
-    fillColor: "#39ff88",
-    fillOpacity: .28,
-    pane: "siloPane"
-  }).addTo(map);
-  activeSiloLayer.pm.enable({ draggable: true, snappable: false });
-  activeSiloLayer.on("pm:edit", syncSiloModalFromLayer);
-  activeSiloLayer.on("pm:dragend", syncSiloModalFromLayer);
-  syncSiloModalFromLayer();
+  if (isEditing && Number.isFinite(lat) && Number.isFinite(lng)) {
+    createSiloEditor(lat, lng, diameter);
+  }
   renderDetail();
 }
 
@@ -1260,11 +1253,70 @@ function finishSiloDrawing() {
 function cancelSiloDrawing() {
   state.drawingSiloSiteId = null;
   map.pm.disableDraw();
-  if (activeSiloLayer) {
-    activeSiloLayer.remove();
-    activeSiloLayer = null;
-  }
+  cleanupSiloEditor();
   renderAll();
+}
+
+function createSiloEditor(lat, lng, diameter) {
+  cleanupSiloEditor();
+  const radius = Math.max(3, Number(diameter || 18) / 2);
+  activeSiloLayer = L.circle([lat, lng], {
+    radius,
+    color: "#f4f542",
+    weight: 3,
+    fillColor: "#39ff88",
+    fillOpacity: .36,
+    pane: "siloPane",
+    interactive: false
+  }).addTo(map);
+  activeSiloCenterMarker = L.marker([lat, lng], {
+    draggable: true,
+    icon: siloEditHandleIcon("center"),
+    zIndexOffset: 1200
+  }).addTo(map).bindTooltip("Arrastra para mover el silo", { direction: "top" });
+  activeSiloCenterMarker.on("drag", event => {
+    setSiloEditorCenter(event.target.getLatLng());
+  });
+  activeSiloRadiusMarker = L.marker(radiusHandleLatLng(lat, lng, radius), {
+    draggable: true,
+    icon: siloEditHandleIcon("radius"),
+    zIndexOffset: 1200
+  }).addTo(map).bindTooltip("Arrastra para cambiar diametro", { direction: "top" });
+  activeSiloRadiusMarker.on("drag", event => {
+    const center = activeSiloLayer.getLatLng();
+    activeSiloLayer.setRadius(Math.max(3, center.distanceTo(event.target.getLatLng())));
+    syncSiloModalFromLayer();
+  });
+  syncSiloModalFromLayer();
+}
+
+function setSiloEditorCenter(point) {
+  if (!activeSiloLayer) return;
+  activeSiloLayer.setLatLng(point);
+  syncSiloEditorHandles();
+  syncSiloModalFromLayer();
+}
+
+function syncSiloEditorHandles() {
+  if (!activeSiloLayer) return;
+  const center = activeSiloLayer.getLatLng();
+  const radius = activeSiloLayer.getRadius();
+  if (activeSiloCenterMarker) activeSiloCenterMarker.setLatLng(center);
+  if (activeSiloRadiusMarker) activeSiloRadiusMarker.setLatLng(radiusHandleLatLng(center.lat, center.lng, radius));
+}
+
+function radiusHandleLatLng(lat, lng, radius) {
+  const point = offsetLatLng(lat, lng, radius, 0);
+  return [point.lat, point.lng];
+}
+
+function cleanupSiloEditor() {
+  [activeSiloLayer, activeSiloCenterMarker, activeSiloRadiusMarker].forEach(layer => {
+    if (layer) layer.remove();
+  });
+  activeSiloLayer = null;
+  activeSiloCenterMarker = null;
+  activeSiloRadiusMarker = null;
 }
 
 async function toggleBoundary(site) {
@@ -1355,19 +1407,6 @@ function boundaryPointsFromLayer() {
 }
 
 function handleGeomanCreate(event) {
-  if (state.drawingSiloSiteId && event.shape === "Circle") {
-    map.pm.disableDraw();
-    if (activeSiloLayer && activeSiloLayer !== event.layer) activeSiloLayer.remove();
-    activeSiloLayer = event.layer;
-    activeSiloLayer.pm.enable({ allowSelfIntersection: false });
-    activeSiloLayer.on("pm:edit", syncSiloModalFromLayer);
-    activeSiloLayer.on("pm:dragend", syncSiloModalFromLayer);
-    syncSiloModalFromLayer();
-    const form = document.getElementById("siloForm");
-    openModal("siloModal");
-    document.getElementById("siloCalc").innerHTML += `<br><strong>Circulo editable:</strong> podes moverlo o estirar el radio en el mapa antes de crear.`;
-    return;
-  }
   if (state.drawingBoundarySiteId && event.shape === "Polygon") {
     map.pm.disableDraw();
     if (activeBoundaryLayer && activeBoundaryLayer !== event.layer) activeBoundaryLayer.remove();
@@ -1389,7 +1428,13 @@ function syncSiloModalFromLayer() {
 }
 
 async function handleMapClick(event) {
-  if (state.drawingSiloSiteId || state.drawingBoundarySiteId) return;
+  if (state.drawingSiloSiteId) {
+    const form = document.getElementById("siloForm");
+    createSiloEditor(event.latlng.lat, event.latlng.lng, Number(form.elements.diameter_m.value || 18));
+    renderDetail();
+    return;
+  }
+  if (state.drawingBoundarySiteId) return;
   if (!state.locatingSiteId) return;
   const { lat, lng } = event.latlng;
   setPendingLocation(lat, lng);

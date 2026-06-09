@@ -911,6 +911,24 @@ a.button {
   background: #fff7f5;
 }
 
+.silo-edit-handle span {
+  display: block;
+  width: 18px;
+  height: 18px;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  background: #2eff86;
+  box-shadow: 0 0 0 3px rgba(3, 31, 13, .78), 0 0 18px rgba(57, 255, 136, .65);
+}
+
+.silo-edit-handle.radius span {
+  width: 16px;
+  height: 16px;
+  background: #ffffff;
+  border-color: #4f8cff;
+  box-shadow: 0 0 0 3px rgba(3, 31, 13, .72), 0 0 16px rgba(79, 140, 255, .65);
+}
+
 @media (max-width: 1180px) {
   body { overflow: auto; }
   .app-shell {
