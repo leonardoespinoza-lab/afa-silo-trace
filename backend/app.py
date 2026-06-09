@@ -27,6 +27,11 @@ HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8788"))
 WEATHER_REFRESH_MINUTES = int(os.getenv("WEATHER_REFRESH_MINUTES", "15"))
 RED_AFA_SOURCE_FILE = "RED_AFA_coordenadas_maps.xlsx"
+USER_LOCATION_SOURCES = {
+    "Ubicacion corregida por usuario",
+    "Coordenada editada manualmente",
+    "Limite dibujado por usuario",
+}
 
 GRAINS = {
     "Maiz": {"safe_humidity": 14.1, "density": 0.72},
@@ -267,18 +272,18 @@ def apply_red_afa_site_data(conn, site_id: str, row: dict, lat: float | None, ln
             province = ?,
             department = COALESCE(?, department),
             town = ?,
-            lat = COALESCE(?, lat),
-            lng = COALESCE(?, lng),
+            lat = CASE WHEN location_source IN ('Ubicacion corregida por usuario', 'Coordenada editada manualmente', 'Limite dibujado por usuario') THEN lat ELSE COALESCE(?, lat) END,
+            lng = CASE WHEN location_source IN ('Ubicacion corregida por usuario', 'Coordenada editada manualmente', 'Limite dibujado por usuario') THEN lng ELSE COALESCE(?, lng) END,
             plant_number = COALESCE(?, plant_number),
             address = COALESCE(?, address),
             registry_status = ?,
-            location_source = ?,
+            location_source = CASE WHEN location_source IN ('Ubicacion corregida por usuario', 'Coordenada editada manualmente', 'Limite dibujado por usuario') THEN location_source ELSE ? END,
             region = ?,
             phone = ?,
             email = ?,
-            coord_maps = ?,
-            maps_url = ?,
-            directions_url = ?,
+            coord_maps = CASE WHEN location_source IN ('Ubicacion corregida por usuario', 'Coordenada editada manualmente', 'Limite dibujado por usuario') THEN coord_maps ELSE ? END,
+            maps_url = CASE WHEN location_source IN ('Ubicacion corregida por usuario', 'Coordenada editada manualmente', 'Limite dibujado por usuario') THEN maps_url ELSE ? END,
+            directions_url = CASE WHEN location_source IN ('Ubicacion corregida por usuario', 'Coordenada editada manualmente', 'Limite dibujado por usuario') THEN directions_url ELSE ? END,
             original_lat = ?,
             original_lng = ?,
             source_file = ?,
@@ -1134,17 +1139,43 @@ def update_site_location(site_id: str, payload: dict) -> dict:
     lat = float(payload["lat"])
     lng = float(payload["lng"])
     source = payload.get("location_source", "Relevamiento satelital")
+    coord_maps = f"{lat:.7f},{lng:.7f}"
+    maps_url = f"https://www.google.com/maps/search/?api=1&query={lat:.7f},{lng:.7f}"
+    directions_url = f"https://www.google.com/maps/dir/?api=1&destination={lat:.7f},{lng:.7f}"
     with connect() as conn:
         before = conn.execute("SELECT * FROM sites WHERE id = ?", (site_id,)).fetchone()
         cur = conn.execute(
-            "UPDATE sites SET lat = ?, lng = ?, location_source = ? WHERE id = ?",
-            (lat, lng, source, site_id),
+            """
+            UPDATE sites
+            SET lat = ?, lng = ?, location_source = ?, coord_maps = ?,
+              maps_url = ?, directions_url = ?, updated_at = now()
+            WHERE id = ?
+            """,
+            (lat, lng, source, coord_maps, maps_url, directions_url, site_id),
         )
         if cur.rowcount == 0:
             raise KeyError("Site not found")
-        write_audit(conn, "update_location", "site", site_id, site_id, dict(before) if before else None, {"lat": lat, "lng": lng, "locationSource": source}, actor_from_payload(payload))
+        write_audit(
+            conn,
+            "update_location",
+            "site",
+            site_id,
+            site_id,
+            dict(before) if before else None,
+            {"lat": lat, "lng": lng, "locationSource": source, "coordMaps": coord_maps},
+            actor_from_payload(payload),
+        )
         conn.commit()
-    return {"ok": True, "siteId": site_id, "lat": lat, "lng": lng, "locationSource": source}
+    return {
+        "ok": True,
+        "siteId": site_id,
+        "lat": lat,
+        "lng": lng,
+        "locationSource": source,
+        "coordMaps": coord_maps,
+        "mapsUrl": maps_url,
+        "directionsUrl": directions_url,
+    }
 
 
 def update_site_metadata(site_id: str, payload: dict) -> dict:
