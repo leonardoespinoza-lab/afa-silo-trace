@@ -160,9 +160,7 @@ function bindControls() {
   document.getElementById("dependencyForm").addEventListener("submit", submitDependency);
   document.getElementById("userForm").addEventListener("submit", submitUser);
   document.getElementById("openUserForm").addEventListener("click", () => {
-    document.getElementById("userFormMessage").hidden = true;
-    populateUserScopeSelect();
-    openModal("userModal");
+    openUserForm();
   });
   document.getElementById("logoutButton").addEventListener("click", () => window.location.reload());
   document.getElementById("userScopeType").addEventListener("change", populateUserScopeSelect);
@@ -840,8 +838,19 @@ function renderUsers() {
           </div>
           <span class="chip ${user.active ? "normal" : "riesgo"}">${user.active ? "Activo" : "Inactivo"}</span>
         </div>
+        ${user.id === "user-admin" ? `<div class="site-meta">Admin principal protegido: no editable.</div>` : `
+          <div class="button-row compact-actions">
+            <button class="button secondary" data-edit-user="${user.id}">Editar</button>
+            <button class="button secondary danger-button" data-delete-user="${user.id}">Eliminar</button>
+          </div>`}
       </article>`;
   }).join("");
+  document.querySelectorAll("[data-edit-user]").forEach(button => {
+    button.addEventListener("click", () => openUserForm(state.users.find(user => user.id === button.dataset.editUser)));
+  });
+  document.querySelectorAll("[data-delete-user]").forEach(button => {
+    button.addEventListener("click", () => deleteUser(button.dataset.deleteUser));
+  });
 }
 
 function permissionLabels(permissions = {}) {
@@ -872,6 +881,29 @@ function populateUserScopeSelect() {
   select.innerHTML = state.sites
     .map(site => `<option value="${site.id}">${site.name} - ${site.town}, ${site.province}</option>`)
     .join("");
+}
+
+function openUserForm(user = null) {
+  const form = document.getElementById("userForm");
+  form.reset();
+  form.dataset.userId = user?.id || "";
+  document.getElementById("userFormMessage").hidden = true;
+  document.getElementById("userModalTitle").textContent = user ? "Editar usuario" : "Nuevo usuario";
+  document.getElementById("userSubmitButton").textContent = user ? "Guardar cambios" : "Crear usuario";
+  form.elements.name.value = user?.name || "";
+  form.elements.email.value = user?.email || "";
+  form.elements.password.value = user ? "" : "demo123";
+  form.elements.password.required = !user;
+  form.elements.role.value = user?.role || "ccp";
+  form.elements.scope_type.value = user?.scopeType || (user?.role === "admin" ? "national" : "site");
+  populateUserScopeSelect();
+  form.elements.scope_value.value = user?.scopeValue || user?.siteId || "";
+  form.elements.can_edit_sites.checked = Boolean(user?.permissions?.editSites);
+  form.elements.can_edit_silos.checked = user ? Boolean(user.permissions?.editSilos) : true;
+  form.elements.can_export_reports.checked = user ? Boolean(user.permissions?.exportReports) : true;
+  form.elements.can_manage_users.checked = Boolean(user?.permissions?.manageUsers);
+  form.elements.active.checked = user ? Boolean(user.active) : true;
+  openModal("userModal");
 }
 
 function renderPlantFocus() {
@@ -1307,13 +1339,16 @@ async function submitDependency(event) {
 
 async function submitUser(event) {
   event.preventDefault();
-  const payload = withActor(formPayload(event.currentTarget));
+  const form = event.currentTarget;
+  const userId = form.dataset.userId;
+  const payload = withActor(userPayloadFromForm(form));
   const message = document.getElementById("userFormMessage");
   message.hidden = true;
   if (payload.scope_type === "national") delete payload.scope_value;
   if (payload.scope_type === "site") payload.site_id = payload.scope_value;
-  const response = await fetch("/api/users", {
-    method: "POST",
+  if (userId && !payload.password) delete payload.password;
+  const response = await fetch(userId ? `/api/users/${userId}` : "/api/users", {
+    method: userId ? "PATCH" : "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
   });
@@ -1324,9 +1359,35 @@ async function submitUser(event) {
     return;
   }
   closeModal("userModal");
-  event.currentTarget.reset();
+  form.reset();
+  delete form.dataset.userId;
+  form.elements.password.required = true;
   document.getElementById("userScopeType").value = "national";
   populateUserScopeSelect();
+  await loadUsers();
+  renderUsers();
+}
+
+function userPayloadFromForm(form) {
+  const payload = formPayload(form);
+  payload.can_edit_sites = form.elements.can_edit_sites.checked ? 1 : 0;
+  payload.can_edit_silos = form.elements.can_edit_silos.checked ? 1 : 0;
+  payload.can_export_reports = form.elements.can_export_reports.checked ? 1 : 0;
+  payload.can_manage_users = form.elements.can_manage_users.checked ? 1 : 0;
+  payload.active = form.elements.active.checked ? 1 : 0;
+  return payload;
+}
+
+async function deleteUser(userId) {
+  const user = state.users.find(item => item.id === userId);
+  if (!user || user.id === "user-admin") return;
+  if (!confirm(`Eliminar usuario ${user.name}?`)) return;
+  const response = await fetch(`/api/users/${userId}`, { method: "DELETE" });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: "No se pudo eliminar el usuario" }));
+    alert(error.error || "No se pudo eliminar el usuario");
+    return;
+  }
   await loadUsers();
   renderUsers();
 }

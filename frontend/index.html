@@ -240,7 +240,7 @@
   <div class="modal" id="userModal" aria-hidden="true">
     <form class="modal-card form-card" id="userForm">
       <div class="modal-head">
-        <h2>Nuevo usuario</h2>
+        <h2 id="userModalTitle">Nuevo usuario</h2>
         <button class="button secondary" type="button" data-close="userModal">Cerrar</button>
       </div>
       <div class="form-grid">
@@ -267,10 +267,11 @@
         <label class="check-row"><input name="can_edit_silos" type="checkbox" value="1" checked /> Editar silos</label>
         <label class="check-row"><input name="can_export_reports" type="checkbox" value="1" checked /> Exportar informes PDF</label>
         <label class="check-row"><input name="can_manage_users" type="checkbox" value="1" /> Administrar usuarios</label>
+        <label class="check-row"><input name="active" type="checkbox" value="1" checked /> Usuario activo</label>
       </div>
       <div class="note" id="userFormMessage" hidden></div>
       <div class="form-actions">
-        <button class="button" type="submit">Crear usuario</button>
+        <button class="button" type="submit" id="userSubmitButton">Crear usuario</button>
       </div>
     </form>
   </div>
@@ -278,6 +279,6 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-  <script src="./src/app.js?v=postgres-audit-users-7"></script>
+  <script src="./src/app.js?v=users-weather-scroll-8"></script>
 </body>
 </html>

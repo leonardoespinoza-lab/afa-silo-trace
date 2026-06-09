@@ -829,6 +829,88 @@ def insert_user(payload: dict) -> dict:
     return {"ok": True, "userId": user_id}
 
 
+def normalize_user_payload(payload: dict, current: dict | None = None) -> dict:
+    role = payload.get("role") or (current.get("role") if current else None)
+    scope_type = payload.get("scope_type") or (current.get("scope_type") if current else None) or ("national" if role == "admin" else "site")
+    scope_value = payload.get("scope_value") if "scope_value" in payload else (current.get("scope_value") if current else None)
+    site_id = payload.get("site_id") if "site_id" in payload else (current.get("site_id") if current else None)
+    if scope_type == "site":
+        site_id = site_id or scope_value
+        scope_value = scope_value or site_id
+    if scope_type == "province":
+        site_id = None
+    if scope_type == "national":
+        scope_value = None
+        site_id = None
+    if scope_type in {"province", "site"} and not scope_value:
+        raise ValueError("Debe elegir el alcance del usuario")
+    is_admin = role == "admin"
+    return {
+        "role": role,
+        "scope_type": scope_type,
+        "scope_value": scope_value,
+        "site_id": site_id,
+        "can_view": int(payload.get("can_view", current.get("can_view", 1) if current else 1)),
+        "can_edit_sites": int(payload.get("can_edit_sites", current.get("can_edit_sites", 1 if is_admin else 0) if current else (1 if is_admin else 0))),
+        "can_edit_silos": int(payload.get("can_edit_silos", current.get("can_edit_silos", 1) if current else 1)),
+        "can_manage_users": int(payload.get("can_manage_users", current.get("can_manage_users", 1 if is_admin else 0) if current else (1 if is_admin else 0))),
+        "can_export_reports": int(payload.get("can_export_reports", current.get("can_export_reports", 1) if current else 1)),
+        "active": int(payload.get("active", current.get("active", 1) if current else 1)),
+    }
+
+
+def update_user(user_id: str, payload: dict) -> dict:
+    if user_id == "user-admin":
+        raise ValueError("El administrador principal no se puede editar")
+    with connect() as conn:
+        current = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        if not current:
+            raise KeyError("User not found")
+        normalized = normalize_user_payload(payload, current)
+        conn.execute(
+            """
+            UPDATE users SET
+              name = ?, email = ?, password = ?, role = ?, site_id = ?,
+              scope_type = ?, scope_value = ?, active = ?,
+              can_view = ?, can_edit_sites = ?, can_edit_silos = ?,
+              can_manage_users = ?, can_export_reports = ?, updated_at = now()
+            WHERE id = ?
+            """,
+            (
+                payload.get("name", current["name"]),
+                payload.get("email", current["email"]).strip().lower(),
+                payload.get("password", current["password"]),
+                normalized["role"],
+                normalized["site_id"],
+                normalized["scope_type"],
+                normalized["scope_value"],
+                normalized["active"],
+                normalized["can_view"],
+                normalized["can_edit_sites"],
+                normalized["can_edit_silos"],
+                normalized["can_manage_users"],
+                normalized["can_export_reports"],
+                user_id,
+            ),
+        )
+        write_audit(conn, "update", "user", user_id, normalized["site_id"], dict(current), {**payload, **normalized}, actor_from_payload(payload))
+        conn.commit()
+    return {"ok": True, "userId": user_id}
+
+
+def delete_user(user_id: str) -> dict:
+    if user_id == "user-admin":
+        raise ValueError("El administrador principal no se puede eliminar")
+    with connect() as conn:
+        current = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        if not current:
+            raise KeyError("User not found")
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        write_audit(conn, "delete", "user", user_id, current["site_id"], dict(current), None, {})
+        conn.commit()
+    return {"ok": True, "userId": user_id}
+
+
 def telemetry_history(silo_id: str) -> list[dict]:
     with connect() as conn:
         rows = conn.execute(
@@ -1416,6 +1498,9 @@ class Handler(SimpleHTTPRequestHandler):
             if parsed.path.startswith("/api/sites/") and parsed.path.endswith("/boundary"):
                 self.send_json(update_site_boundary(parsed.path.split("/")[3], payload))
                 return
+            if parsed.path.startswith("/api/users/"):
+                self.send_json(update_user(parsed.path.split("/")[3], payload))
+                return
             if parsed.path.startswith("/api/silos/"):
                 self.send_json(update_silo(parsed.path.split("/")[3], payload))
                 return
@@ -1430,12 +1515,17 @@ class Handler(SimpleHTTPRequestHandler):
     def do_DELETE(self) -> None:
         parsed = urlparse(self.path)
         try:
+            if parsed.path.startswith("/api/users/"):
+                self.send_json(delete_user(parsed.path.split("/")[3]))
+                return
             if parsed.path.startswith("/api/silos/"):
                 self.send_json(delete_silo(parsed.path.split("/")[3]))
                 return
             self.send_json({"error": "Not found"}, status=404)
         except KeyError as exc:
             self.send_json({"error": str(exc)}, status=404)
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, status=400)
 
     def read_json(self) -> dict:
         length = int(self.headers.get("Content-Length", "0"))
