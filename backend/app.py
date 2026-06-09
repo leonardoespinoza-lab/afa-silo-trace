@@ -161,6 +161,11 @@ def dew_point(temp: float, humidity: float) -> float:
     return round((b * alpha) / (a - alpha), 1)
 
 
+def weather_metric(row: dict, key: str, default: float | int | None = None):
+    value = row.get(key)
+    return default if value is None else value
+
+
 def init_db() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
@@ -658,6 +663,9 @@ def latest_sites() -> list[dict]:
               s.original_lat, s.original_lng, s.source_file, s.boundary_geojson,
               w.recorded_at AS weather_recorded_at, w.external_temperature, w.external_humidity,
               w.dew_point, w.wind_kmh, w.pressure_hpa, w.rain_mm,
+              w.apparent_temperature, w.evapotranspiration_mm, w.et0_fao_evapotranspiration_mm,
+              w.vapour_pressure_deficit_kpa, w.precipitation_probability, w.cloud_cover, w.visibility_m,
+              w.source AS weather_source,
               si.id AS silo_id, si.code, si.grain, si.campaign, si.producer, si.origin,
               si.capacity_m3, si.diameter_m, si.height_m, si.density_t_m3, si.loaded_at, si.mode, si.lat AS silo_lat, si.lng AS silo_lng,
               lt.recorded_at AS telemetry_recorded_at, lt.grain_humidity, lt.grain_temperature,
@@ -706,6 +714,14 @@ def latest_sites() -> list[dict]:
                     "windKmh": row["wind_kmh"],
                     "pressureHpa": row["pressure_hpa"],
                     "rainMm": row["rain_mm"],
+                    "apparentTemperature": row["apparent_temperature"],
+                    "evapotranspirationMm": row["evapotranspiration_mm"],
+                    "et0FaoEvapotranspirationMm": row["et0_fao_evapotranspiration_mm"],
+                    "vapourPressureDeficitKpa": row["vapour_pressure_deficit_kpa"],
+                    "precipitationProbability": row["precipitation_probability"],
+                    "cloudCover": row["cloud_cover"],
+                    "visibilityM": row["visibility_m"],
+                    "source": row["weather_source"],
                 },
                 "silos": [],
             },
@@ -1428,10 +1444,17 @@ def open_meteo_series(site_id: str) -> dict:
                     "temperature_2m",
                     "relative_humidity_2m",
                     "dew_point_2m",
+                    "apparent_temperature",
                     "precipitation",
+                    "precipitation_probability",
                     "wind_speed_10m",
                     "wind_gusts_10m",
                     "pressure_msl",
+                    "cloud_cover",
+                    "visibility",
+                    "vapour_pressure_deficit",
+                    "evapotranspiration",
+                    "et0_fao_evapotranspiration",
                 ]
             ),
             "past_days": 2,
@@ -1452,10 +1475,17 @@ def open_meteo_series(site_id: str) -> dict:
                 "temperature": hourly.get("temperature_2m", [None] * len(times))[idx],
                 "humidity": hourly.get("relative_humidity_2m", [None] * len(times))[idx],
                 "dewPoint": hourly.get("dew_point_2m", [None] * len(times))[idx],
+                "apparentTemperature": hourly.get("apparent_temperature", [None] * len(times))[idx],
                 "rain": hourly.get("precipitation", [None] * len(times))[idx],
+                "precipitationProbability": hourly.get("precipitation_probability", [None] * len(times))[idx],
                 "wind": hourly.get("wind_speed_10m", [None] * len(times))[idx],
                 "gusts": hourly.get("wind_gusts_10m", [None] * len(times))[idx],
                 "pressure": hourly.get("pressure_msl", [None] * len(times))[idx],
+                "cloudCover": hourly.get("cloud_cover", [None] * len(times))[idx],
+                "visibility": hourly.get("visibility", [None] * len(times))[idx],
+                "vpd": hourly.get("vapour_pressure_deficit", [None] * len(times))[idx],
+                "evapotranspiration": hourly.get("evapotranspiration", [None] * len(times))[idx],
+                "et0Fao": hourly.get("et0_fao_evapotranspiration", [None] * len(times))[idx],
             }
         )
     return {
@@ -1486,15 +1516,25 @@ def persist_weather_series(site_id: str) -> dict:
                 """
                 INSERT INTO weather (
                   site_id, recorded_at, external_temperature, external_humidity,
-                  dew_point, wind_kmh, pressure_hpa, rain_mm, source
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  dew_point, wind_kmh, pressure_hpa, rain_mm, apparent_temperature,
+                  evapotranspiration_mm, et0_fao_evapotranspiration_mm,
+                  vapour_pressure_deficit_kpa, precipitation_probability,
+                  cloud_cover, visibility_m, source
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (site_id, recorded_at, source) DO UPDATE SET
                   external_temperature = EXCLUDED.external_temperature,
                   external_humidity = EXCLUDED.external_humidity,
                   dew_point = EXCLUDED.dew_point,
                   wind_kmh = EXCLUDED.wind_kmh,
                   pressure_hpa = EXCLUDED.pressure_hpa,
-                  rain_mm = EXCLUDED.rain_mm
+                  rain_mm = EXCLUDED.rain_mm,
+                  apparent_temperature = EXCLUDED.apparent_temperature,
+                  evapotranspiration_mm = EXCLUDED.evapotranspiration_mm,
+                  et0_fao_evapotranspiration_mm = EXCLUDED.et0_fao_evapotranspiration_mm,
+                  vapour_pressure_deficit_kpa = EXCLUDED.vapour_pressure_deficit_kpa,
+                  precipitation_probability = EXCLUDED.precipitation_probability,
+                  cloud_cover = EXCLUDED.cloud_cover,
+                  visibility_m = EXCLUDED.visibility_m
                 """,
                 (
                     site_id,
@@ -1505,6 +1545,13 @@ def persist_weather_series(site_id: str) -> dict:
                     latest["wind"] or 0,
                     latest["pressure"] or 0,
                     latest["rain"] or 0,
+                    latest.get("apparentTemperature"),
+                    latest.get("evapotranspiration"),
+                    latest.get("et0Fao"),
+                    latest.get("vpd"),
+                    latest.get("precipitationProbability"),
+                    latest.get("cloudCover"),
+                    latest.get("visibility"),
                     "Open-Meteo",
                 ),
             )
@@ -1515,8 +1562,11 @@ def persist_weather_series(site_id: str) -> dict:
                 """
                 INSERT INTO weather_forecasts (
                   site_id, forecast_for, external_temperature, external_humidity,
-                  dew_point, wind_kmh, wind_gust_kmh, pressure_hpa, rain_mm, source
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  dew_point, wind_kmh, wind_gust_kmh, pressure_hpa, rain_mm,
+                  apparent_temperature, evapotranspiration_mm,
+                  et0_fao_evapotranspiration_mm, vapour_pressure_deficit_kpa,
+                  precipitation_probability, cloud_cover, visibility_m, source
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (site_id, forecast_for, source) DO UPDATE SET
                   fetched_at = now(),
                   external_temperature = EXCLUDED.external_temperature,
@@ -1525,7 +1575,14 @@ def persist_weather_series(site_id: str) -> dict:
                   wind_kmh = EXCLUDED.wind_kmh,
                   wind_gust_kmh = EXCLUDED.wind_gust_kmh,
                   pressure_hpa = EXCLUDED.pressure_hpa,
-                  rain_mm = EXCLUDED.rain_mm
+                  rain_mm = EXCLUDED.rain_mm,
+                  apparent_temperature = EXCLUDED.apparent_temperature,
+                  evapotranspiration_mm = EXCLUDED.evapotranspiration_mm,
+                  et0_fao_evapotranspiration_mm = EXCLUDED.et0_fao_evapotranspiration_mm,
+                  vapour_pressure_deficit_kpa = EXCLUDED.vapour_pressure_deficit_kpa,
+                  precipitation_probability = EXCLUDED.precipitation_probability,
+                  cloud_cover = EXCLUDED.cloud_cover,
+                  visibility_m = EXCLUDED.visibility_m
                 """,
                 (
                     site_id,
@@ -1537,6 +1594,13 @@ def persist_weather_series(site_id: str) -> dict:
                     row["gusts"],
                     row["pressure"],
                     row["rain"],
+                    row.get("apparentTemperature"),
+                    row.get("evapotranspiration"),
+                    row.get("et0Fao"),
+                    row.get("vpd"),
+                    row.get("precipitationProbability"),
+                    row.get("cloudCover"),
+                    row.get("visibility"),
                     "Open-Meteo",
                 ),
             )

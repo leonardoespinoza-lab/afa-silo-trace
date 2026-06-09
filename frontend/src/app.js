@@ -35,10 +35,25 @@ const map = L.map("map", {
   maxZoom: MAP_MAX_ZOOM
 }).setView([-32.9, -61.4], 7);
 L.control.zoom({ position: "bottomright" }).addTo(map);
+map.createPane("referencePane");
+map.getPane("referencePane").style.zIndex = 250;
 const satelliteLayer = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
   maxZoom: MAP_MAX_ZOOM,
   maxNativeZoom: MAP_MAX_ZOOM,
   attribution: "Tiles &copy; Esri"
+});
+const referenceLabelLayer = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}", {
+  pane: "referencePane",
+  maxZoom: MAP_MAX_ZOOM,
+  maxNativeZoom: MAP_MAX_ZOOM,
+  attribution: "Labels &copy; Esri"
+});
+const referenceRoadLayer = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}", {
+  pane: "referencePane",
+  maxZoom: MAP_MAX_ZOOM,
+  maxNativeZoom: MAP_MAX_ZOOM,
+  opacity: .78,
+  attribution: "Roads &copy; Esri"
 });
 const streetLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
   maxZoom: MAP_MAX_ZOOM,
@@ -46,7 +61,13 @@ const streetLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.
   attribution: "&copy; OpenStreetMap"
 });
 satelliteLayer.addTo(map);
-L.control.layers({ "Satelital": satelliteLayer, "Calles": streetLayer }, {}, { position: "bottomright" }).addTo(map);
+referenceRoadLayer.addTo(map);
+referenceLabelLayer.addTo(map);
+L.control.layers(
+  { "Satelital": satelliteLayer, "Calles OSM": streetLayer },
+  { "Rutas y calles": referenceRoadLayer, "Etiquetas y localidades": referenceLabelLayer },
+  { position: "bottomright" }
+).addTo(map);
 map.createPane("boundaryPane");
 map.getPane("boundaryPane").style.zIndex = 350;
 map.getPane("boundaryPane").style.pointerEvents = "none";
@@ -660,6 +681,14 @@ function renderWeatherAnalytics() {
   const maxWind = maxValue(forecast72, "wind");
   const maxHumidity = maxValue(forecast72, "humidity");
   const minDewGap = minDewGapValue(forecast72);
+  const rainNext72 = sumRows(forecast72, "rain");
+  const etNext72 = sumRows(forecast72, "et0Fao");
+  const maxVpd = maxValue(forecast72, "vpd");
+  const avgVpd = avgValue(forecast72, "vpd");
+  const maxPrecipProb = maxValue(forecast72, "precipitationProbability");
+  const avgCloudCover = avgValue(forecast72, "cloudCover");
+  const minVisibilityKm = minValue(forecast72, "visibility") / 1000;
+  const aerationLabel = aerationWindowLabel(forecast72);
   view.innerHTML = `
     <div class="section-head">
       <div>
@@ -673,15 +702,29 @@ function renderWeatherAnalytics() {
       ${dashboardCard(`${site.weather.externalHumidity || 0}%`, "HR actual")}
       ${dashboardCard(`${site.weather.externalTemperature || 0}°C`, "temp. actual")}
       ${dashboardCard(`${rainNext24.toFixed(1)} mm`, "lluvia prox. 24 h")}
+      ${dashboardCard(`${rainNext72.toFixed(1)} mm`, "lluvia prox. 72 h")}
       ${dashboardCard(`${maxWind.toFixed(1)} km/h`, "viento max. 72 h")}
       ${dashboardCard(`${maxHumidity.toFixed(0)}%`, "HR max. 72 h")}
       ${dashboardCard(`${minDewGap.toFixed(1)}°C`, "min. brecha temp-rocio")}
+      ${dashboardCard(`${etNext72.toFixed(1)} mm`, "ET0 prox. 72 h")}
+      ${dashboardCard(`${maxVpd.toFixed(2)} kPa`, "VPD max. 72 h")}
+      ${dashboardCard(`${maxPrecipProb.toFixed(0)}%`, "prob. lluvia max.")}
+      ${dashboardCard(`${avgCloudCover.toFixed(0)}%`, "nubosidad media")}
+      ${dashboardCard(`${Number.isFinite(minVisibilityKm) ? minVisibilityKm.toFixed(1) : "s/d"} km`, "visibilidad min.")}
+    </div>
+    <div class="weather-insight-grid">
+      ${insightCard("Ventana de aireacion", aerationLabel.title, aerationLabel.text, aerationLabel.level)}
+      ${insightCard("Condensacion", condensationRiskLabel(minDewGap), "Brecha entre temperatura externa y punto de rocio.", minDewGap <= 2 ? "riesgo" : "normal")}
+      ${insightCard("Demanda atmosferica", `${avgVpd.toFixed(2)} kPa`, "VPD promedio 72 h para entender secado/estrés.", maxVpd > 1.6 ? "atencion" : "normal")}
+      ${insightCard("Balance agua", `${etNext72.toFixed(1)} mm ET0`, "Referencia FAO-56 para evaporacion potencial.", "normal")}
     </div>
     <div class="weather-analytics-grid">
       ${chartCard("humidityChart", "Humedad relativa externa", "HR % por hora")}
       ${chartCard("temperatureChart", "Temperatura y punto de rocio", "Curvas para riesgo de condensacion")}
       ${chartCard("rainChart", "Lluvia horaria", "mm/h historico reciente y pronostico")}
       ${chartCard("windChart", "Viento y rafagas", "km/h para evaluar aireacion")}
+      ${chartCard("vpdChart", "Deficit de presion de vapor", "VPD kPa: demanda de secado del aire")}
+      ${chartCard("etChart", "Evapotranspiracion y nubosidad", "ET0 mm/h y cobertura nubosa")}
     </div>
     <div class="note">${state.weatherSeriesLoading ? "Cargando serie climatica..." : series.length ? `Serie horaria: ${series.length} puntos · timezone ${payload?.timezone || "auto"}` : "No se pudo cargar la serie climatica."}</div>
   `;
@@ -697,6 +740,15 @@ function chartCard(id, title, subtitle) {
         <span>${subtitle}</span>
       </div>
       <canvas id="${id}" height="150"></canvas>
+    </article>`;
+}
+
+function insightCard(title, value, text, level = "normal") {
+  return `
+    <article class="weather-insight ${level}">
+      <span>${title}</span>
+      <strong>${value}</strong>
+      <p>${text}</p>
     </article>`;
 }
 
@@ -725,7 +777,9 @@ function drawWeatherCharts(series) {
   const temperatureCanvas = document.getElementById("temperatureChart");
   const rainCanvas = document.getElementById("rainChart");
   const windCanvas = document.getElementById("windChart");
-  if (!humidityCanvas || !temperatureCanvas || !rainCanvas || !windCanvas) return;
+  const vpdCanvas = document.getElementById("vpdChart");
+  const etCanvas = document.getElementById("etChart");
+  if (!humidityCanvas || !temperatureCanvas || !rainCanvas || !windCanvas || !vpdCanvas || !etCanvas) return;
   weatherCharts.forEach(chart => chart.destroy());
   weatherCharts = [];
   const labels = series.map(point => formatChartTime(point.time));
@@ -755,6 +809,15 @@ function drawWeatherCharts(series) {
     dataset("Viento km/h", series.map(p => p.wind), "#39ff88"),
     dataset("Rafagas km/h", series.map(p => p.gusts), "#ff9a3d")
   ], baseOptions)));
+  weatherCharts.push(new Chart(vpdCanvas, lineConfig(labels, [
+    dataset("VPD kPa", series.map(p => p.vpd), "#f4f542"),
+    dataset("Prob. lluvia %", series.map(p => p.precipitationProbability), "#56dcff")
+  ], baseOptions)));
+  weatherCharts.push(new Chart(etCanvas, lineConfig(labels, [
+    dataset("ET0 mm", series.map(p => p.et0Fao), "#39ff88"),
+    dataset("ET real mm", series.map(p => p.evapotranspiration), "#ff9a3d"),
+    dataset("Nubosidad %", series.map(p => p.cloudCover), "#56dcff")
+  ], baseOptions)));
 }
 
 function dataset(label, data, color) {
@@ -782,9 +845,42 @@ function maxValue(series, key) {
   return Math.max(0, ...series.map(point => Number(point[key] || 0)));
 }
 
+function minValue(series, key) {
+  const values = series.map(point => Number(point[key])).filter(Number.isFinite);
+  return values.length ? Math.min(...values) : 0;
+}
+
+function avgValue(series, key) {
+  const values = series.map(point => Number(point[key])).filter(Number.isFinite);
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+}
+
 function minDewGapValue(series) {
   const values = series.map(point => Number(point.temperature) - Number(point.dewPoint)).filter(Number.isFinite);
   return values.length ? Math.min(...values) : 0;
+}
+
+function aerationWindowLabel(series) {
+  const goodHours = series.filter(point => {
+    const humidity = Number(point.humidity);
+    const wind = Number(point.wind);
+    const rain = Number(point.rain || 0);
+    const dewGap = Number(point.temperature) - Number(point.dewPoint);
+    return humidity <= 75 && wind >= 4 && rain < .2 && dewGap >= 3;
+  }).length;
+  if (goodHours >= 12) {
+    return { title: `${goodHours} h favorables`, text: "Buen margen operativo para aireacion preventiva.", level: "normal" };
+  }
+  if (goodHours >= 5) {
+    return { title: `${goodHours} h aprovechables`, text: "Airear con control de humedad y punto de rocio.", level: "atencion" };
+  }
+  return { title: `${goodHours} h favorables`, text: "Condiciones pobres para aireacion; priorizar monitoreo.", level: "riesgo" };
+}
+
+function condensationRiskLabel(minDewGap) {
+  if (minDewGap <= 1) return "Alto";
+  if (minDewGap <= 3) return "Medio";
+  return "Bajo";
 }
 
 function formatChartTime(value) {
@@ -1095,6 +1191,12 @@ function renderDetail() {
 
 function weatherPanel(site) {
   const weather = site.weather;
+  const dewGap = Number(weather.externalTemperature || 0) - Number(weather.dewPoint || 0);
+  const aerationState = Number(weather.externalHumidity || 0) <= 75 && dewGap >= 3 && Number(weather.rainMm || 0) < .2
+    ? "Favorable"
+    : dewGap <= 2 || Number(weather.externalHumidity || 0) >= 85
+      ? "Riesgo"
+      : "Vigilar";
   return `
     <div class="weather-card">
       <p class="section-title">Clima externo del acopio</p>
@@ -1107,10 +1209,17 @@ function weatherPanel(site) {
       </div>
       <div class="weather-grid">
         <div class="mini"><strong>${weather.externalTemperature}°C</strong><span>temp. externa</span></div>
+        <div class="mini"><strong>${weather.apparentTemperature ?? weather.externalTemperature}°C</strong><span>sensacion</span></div>
         <div class="mini"><strong>${weather.dewPoint}°C</strong><span>punto de rocio</span></div>
+        <div class="mini"><strong>${dewGap.toFixed(1)}°C</strong><span>brecha rocio</span></div>
         <div class="mini"><strong>${weather.windKmh} km/h</strong><span>viento</span></div>
+        <div class="mini"><strong>${weather.vapourPressureDeficitKpa ?? "s/d"}</strong><span>VPD kPa</span></div>
         <div class="mini"><strong>${weather.pressureHpa}</strong><span>hPa</span></div>
         <div class="mini"><strong>${weather.rainMm} mm</strong><span>lluvia</span></div>
+        <div class="mini"><strong>${weather.precipitationProbability ?? 0}%</strong><span>prob. lluvia</span></div>
+        <div class="mini"><strong>${weather.cloudCover ?? 0}%</strong><span>nubosidad</span></div>
+        <div class="mini"><strong>${weather.et0FaoEvapotranspirationMm ?? "s/d"} mm</strong><span>ET0 hora</span></div>
+        <div class="mini"><strong>${aerationState}</strong><span>aireacion</span></div>
         <div class="mini"><strong>${formatShortTime(weather.recordedAt)}</strong><span>ultima lectura</span></div>
       </div>
     </div>`;

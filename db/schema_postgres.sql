@@ -93,6 +93,13 @@ CREATE TABLE IF NOT EXISTS weather (
   wind_kmh DOUBLE PRECISION NOT NULL,
   pressure_hpa DOUBLE PRECISION NOT NULL,
   rain_mm DOUBLE PRECISION NOT NULL,
+  apparent_temperature DOUBLE PRECISION,
+  evapotranspiration_mm DOUBLE PRECISION,
+  et0_fao_evapotranspiration_mm DOUBLE PRECISION,
+  vapour_pressure_deficit_kpa DOUBLE PRECISION,
+  precipitation_probability INTEGER,
+  cloud_cover INTEGER,
+  visibility_m DOUBLE PRECISION,
   source TEXT NOT NULL DEFAULT 'Open-Meteo',
   UNIQUE (site_id, recorded_at, source)
 );
@@ -109,9 +116,31 @@ CREATE TABLE IF NOT EXISTS weather_forecasts (
   wind_gust_kmh DOUBLE PRECISION,
   pressure_hpa DOUBLE PRECISION,
   rain_mm DOUBLE PRECISION,
+  apparent_temperature DOUBLE PRECISION,
+  evapotranspiration_mm DOUBLE PRECISION,
+  et0_fao_evapotranspiration_mm DOUBLE PRECISION,
+  vapour_pressure_deficit_kpa DOUBLE PRECISION,
+  precipitation_probability INTEGER,
+  cloud_cover INTEGER,
+  visibility_m DOUBLE PRECISION,
   source TEXT NOT NULL DEFAULT 'Open-Meteo',
   UNIQUE (site_id, forecast_for, source)
 );
+
+ALTER TABLE weather ADD COLUMN IF NOT EXISTS apparent_temperature DOUBLE PRECISION;
+ALTER TABLE weather ADD COLUMN IF NOT EXISTS evapotranspiration_mm DOUBLE PRECISION;
+ALTER TABLE weather ADD COLUMN IF NOT EXISTS et0_fao_evapotranspiration_mm DOUBLE PRECISION;
+ALTER TABLE weather ADD COLUMN IF NOT EXISTS vapour_pressure_deficit_kpa DOUBLE PRECISION;
+ALTER TABLE weather ADD COLUMN IF NOT EXISTS precipitation_probability INTEGER;
+ALTER TABLE weather ADD COLUMN IF NOT EXISTS cloud_cover INTEGER;
+ALTER TABLE weather ADD COLUMN IF NOT EXISTS visibility_m DOUBLE PRECISION;
+ALTER TABLE weather_forecasts ADD COLUMN IF NOT EXISTS apparent_temperature DOUBLE PRECISION;
+ALTER TABLE weather_forecasts ADD COLUMN IF NOT EXISTS evapotranspiration_mm DOUBLE PRECISION;
+ALTER TABLE weather_forecasts ADD COLUMN IF NOT EXISTS et0_fao_evapotranspiration_mm DOUBLE PRECISION;
+ALTER TABLE weather_forecasts ADD COLUMN IF NOT EXISTS vapour_pressure_deficit_kpa DOUBLE PRECISION;
+ALTER TABLE weather_forecasts ADD COLUMN IF NOT EXISTS precipitation_probability INTEGER;
+ALTER TABLE weather_forecasts ADD COLUMN IF NOT EXISTS cloud_cover INTEGER;
+ALTER TABLE weather_forecasts ADD COLUMN IF NOT EXISTS visibility_m DOUBLE PRECISION;
 
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,

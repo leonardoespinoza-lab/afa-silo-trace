@@ -637,6 +637,51 @@ a.button {
   margin: 14px 0;
 }
 
+.weather-insight-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(180px, 1fr));
+  gap: 12px;
+  max-width: 1240px;
+  margin: 14px 0;
+}
+
+.weather-insight {
+  min-height: 122px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(6, 73, 30, .74), rgba(2, 35, 14, .90));
+}
+
+.weather-insight span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.weather-insight strong {
+  display: block;
+  margin-top: 6px;
+  color: var(--afa-yellow);
+  font-size: 24px;
+  line-height: 1.05;
+}
+
+.weather-insight p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.weather-insight.atencion {
+  border-color: rgba(255, 227, 90, .42);
+}
+
+.weather-insight.riesgo {
+  border-color: rgba(255, 154, 61, .46);
+}
+
 .chart-card {
   height: 280px;
   display: grid;
@@ -1235,6 +1280,7 @@ a.button {
   .dashboard-grid,
   .dashboard-grid.compact,
   .weather-analytics-grid,
+  .weather-insight-grid,
   .plant-summary,
   .site-stats,
   .storage-kpis,
